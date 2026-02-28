@@ -1,35 +1,62 @@
 'use client';
 
 import { useEffect, useMemo, useState } from 'react';
-import Topbar from '../../../components/Topbar';
+import Topbar from '../../components/Topbar';
 import { supabase } from '../../../lib/supabaseClient';
 import { fetchRole } from '../../../lib/role';
 
 type StudentRow = {
   student_id: string;
   class_id: string | null;
+  is_gu: boolean; // NOT NULL bei dir
+  religion: 'EV' | 'RK' | 'PP' | null;
+  course: 'Bio' | 'Chemie' | 'Sowi' | 'Informatik' | 'Arbeitslehre' | 'F' | null;
   active: boolean | null;
   created_at: string | null;
 };
 
+const COURSE_OPTIONS: StudentRow['course'][] = ['Bio', 'Chemie', 'Sowi', 'Informatik', 'Arbeitslehre', 'F'];
+const REL_OPTIONS: NonNullable<StudentRow['religion']>[] = ['EV', 'RK', 'PP'];
+
+function gradeFromClassId(classId: string): number | null {
+  // "5a" -> 5, "10b" -> 10
+  const m = (classId || '').trim().match(/^(\d{1,2})/);
+  if (!m) return null;
+  const n = Number(m[1]);
+  return Number.isFinite(n) ? n : null;
+}
+
 export default function AdminStudentsPage() {
   const [ready, setReady] = useState(false);
 
-  const [classId, setClassId] = useState('');     // z.B. 5a
-  const [studentId, setStudentId] = useState(''); // z.B. S0001
-
-  const [bookCode, setBookCode] = useState('');
   const [msg, setMsg] = useState<string | null>(null);
   const [ok, setOk] = useState<string | null>(null);
 
+  // Formular
+  const [classId, setClassId] = useState('');       // z.B. 5a
+  const [studentId, setStudentId] = useState('');   // z.B. S0001
+  const [isGu, setIsGu] = useState(false);          // Regel default
+  const [religion, setReligion] = useState<StudentRow['religion']>('EV'); // Pflicht (du kannst Standard EV setzen)
+  const [course, setCourse] = useState<StudentRow['course']>(null);       // optional
+  const [active, setActive] = useState(true);
+
+  // Scannen
+  const [bookCode, setBookCode] = useState('');
+
+  // Liste
   const [rows, setRows] = useState<StudentRow[]>([]);
   const [loadingList, setLoadingList] = useState(false);
+
+  // Auswahl zum Bearbeiten
+  const [selected, setSelected] = useState<string | null>(null);
+
+  const grade = useMemo(() => gradeFromClassId(classId), [classId]);
+  const showCourseHint = grade !== null && grade >= 7;
 
   useEffect(() => {
     (async () => {
       const { data } = await supabase.auth.getSession();
       if (!data.session) return (window.location.href = '/login');
-
       const role = await fetchRole();
       if (role !== 'admin') return (window.location.href = '/teacher');
 
@@ -45,7 +72,7 @@ export default function AdminStudentsPage() {
     try {
       const { data, error } = await supabase
         .from('sb_students')
-        .select('student_id, class_id, active, created_at')
+        .select('student_id, class_id, is_gu, religion, course, active, created_at')
         .order('class_id', { ascending: true })
         .order('student_id', { ascending: true });
 
@@ -56,6 +83,31 @@ export default function AdminStudentsPage() {
     } finally {
       setLoadingList(false);
     }
+  }
+
+  function resetForm() {
+    setSelected(null);
+    setClassId('');
+    setStudentId('');
+    setIsGu(false);
+    setReligion('EV');
+    setCourse(null);
+    setActive(true);
+    setBookCode('');
+    setMsg(null);
+    setOk(null);
+  }
+
+  function loadIntoForm(r: StudentRow) {
+    setSelected(r.student_id);
+    setClassId(r.class_id ?? '');
+    setStudentId(r.student_id);
+    setIsGu(Boolean(r.is_gu));
+    setReligion((r.religion ?? 'EV') as any);
+    setCourse((r.course ?? null) as any);
+    setActive(Boolean(r.active ?? true));
+    setOk(null);
+    setMsg(null);
   }
 
   async function saveStudent() {
@@ -69,20 +121,30 @@ export default function AdminStudentsPage() {
       if (!sid) throw new Error('Schüler-Code fehlt (z.B. S0001).');
       if (!cid) throw new Error('Klasse fehlt (z.B. 5a).');
 
+      // Pflicht: Religion
+      if (!religion) throw new Error('Religion fehlt (EV / RK / PP).');
+
+      // Optional: Kurs – wir speichern null, wenn leer
+      const courseVal = course ? course : null;
+
       const { error } = await supabase
         .from('sb_students')
         .upsert(
           {
             student_id: sid,
-            class_id: cid,     // ✅ WICHTIG: class_id, nicht class
-            active: true,
+            class_id: cid,
+            is_gu: Boolean(isGu),      // Pflicht (NOT NULL)
+            religion,
+            course: courseVal,
+            active: Boolean(active),
           },
           { onConflict: 'student_id' }
         );
 
       if (error) throw error;
 
-      setOk(`Schüler ${sid} (${cid}) gespeichert.`);
+      setOk(`Schüler ${sid} gespeichert.`);
+      setSelected(sid);
       await loadStudents();
     } catch (e: any) {
       setMsg(e?.message ?? 'Unbekannter Fehler beim Speichern.');
@@ -97,12 +159,9 @@ export default function AdminStudentsPage() {
     try {
       const sid = studentId.trim();
       const code = bookCode.trim();
-
-      if (!sid) throw new Error('Schüler-Code fehlt.');
+      if (!sid) throw new Error('Schüler-Code fehlt (oben).');
       if (!code) throw new Error('Buch-Code fehlt.');
 
-      // ✅ Wir nehmen die Admin-Scan-Funktion (bei dir existiert sb_scan_book_admin)
-      // Falls dein RPC andere Parameternamen hat: Supabase -> SQL Editor -> Routine Parameter List -> sb_scan_book_admin
       const { error } = await supabase.rpc('sb_scan_book_admin', {
         p_scan: code,
         p_new_holder_type: 'student',
@@ -145,10 +204,9 @@ export default function AdminStudentsPage() {
   }
 
   const filtered = useMemo(() => {
-    // optional: kleine Filterlogik (leer = alle)
     const cid = classId.trim().toLowerCase();
     const sid = studentId.trim().toLowerCase();
-    return rows.filter(r => {
+    return rows.filter((r) => {
       const okClass = cid ? (r.class_id ?? '').toLowerCase().includes(cid) : true;
       const okStudent = sid ? (r.student_id ?? '').toLowerCase().includes(sid) : true;
       return okClass && okStudent;
@@ -158,79 +216,130 @@ export default function AdminStudentsPage() {
   if (!ready) return <div style={{ padding: 20 }}>Lade…</div>;
 
   return (
-    <div style={{ padding: 16 }}>
+    <div className="container">
       <Topbar title="Admin · Schüler" />
 
-      <div style={{ display: 'flex', gap: 10, marginTop: 10, flexWrap: 'wrap' }}>
-        <button onClick={() => (window.location.href = '/admin')}>← Dashboard</button>
-        <button onClick={() => (window.location.href = '/teacher')}>Zur Lehrkräfte-Ansicht</button>
-        <button onClick={() => supabase.auth.signOut().then(() => (window.location.href = '/login'))}>
-          Logout
-        </button>
-      </div>
-
-      <h3 style={{ marginTop: 16 }}>Schüler (Code + Klasse) anlegen</h3>
-
-      <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap', alignItems: 'center' }}>
-        <input
-          placeholder="Klasse (z.B. 5a)"
-          value={classId}
-          onChange={(e) => setClassId(e.target.value)}
-          style={{ padding: 8, minWidth: 160 }}
-        />
-        <input
-          placeholder="Schüler-Code (z.B. S0001)"
-          value={studentId}
-          onChange={(e) => setStudentId(e.target.value)}
-          style={{ padding: 8, minWidth: 180 }}
-        />
-        <button onClick={saveStudent} style={{ padding: '8px 12px' }}>
-          Schüler speichern
-        </button>
-        <button onClick={loadStudents} style={{ padding: '8px 12px' }}>
-          Liste aktualisieren
-        </button>
-      </div>
-
-      <h3 style={{ marginTop: 16 }}>Buch scannen</h3>
-
-      <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap', alignItems: 'center' }}>
-        <input
-          placeholder="Buch-Code scannen (z.B. 9149)"
-          value={bookCode}
-          onChange={(e) => setBookCode(e.target.value)}
-          style={{ padding: 8, minWidth: 260 }}
-        />
-        <button onClick={assignBookToStudent} style={{ padding: '8px 12px' }}>
-          Buch → Schüler
-        </button>
-        <button onClick={assignBookToStorage} style={{ padding: '8px 12px' }}>
-          Buch → Lager
-        </button>
-      </div>
-
-      {msg && <div style={{ marginTop: 12, color: 'crimson' }}>{msg}</div>}
-      {ok && <div style={{ marginTop: 12, color: 'limegreen' }}>{ok}</div>}
-
-      <h3 style={{ marginTop: 18 }}>Gespeicherte Schüler (nur Code + Klasse)</h3>
-      {loadingList ? (
-        <div>Lade Liste…</div>
-      ) : (
-        <div style={{ marginTop: 8 }}>
-          {filtered.length === 0 ? (
-            <div>Keine Treffer.</div>
-          ) : (
-            <ul>
-              {filtered.map((r) => (
-                <li key={r.student_id}>
-                  <b>{r.student_id}</b> — Klasse: <b>{r.class_id ?? '-'}</b> — aktiv:{' '}
-                  {String(r.active ?? true)}
-                </li>
-              ))}
-            </ul>
-          )}
+      <div className="card">
+        <div className="row">
+          <div className="badge">Schüler anlegen / bearbeiten</div>
+          <div className="spacer" />
+          <button className="btn secondary" onClick={() => (window.location.href = '/admin')}>← Dashboard</button>
+          <button className="btn secondary" onClick={() => (window.location.href = '/teacher')}>Lehrkräfte</button>
+          <button className="btn secondary" onClick={resetForm}>Neu</button>
         </div>
-      )}
+
+        <div style={{ height: 12 }} />
+
+        <div className="row">
+          <input className="input" value={classId} onChange={(e) => setClassId(e.target.value)} placeholder="Klasse (z.B. 5a)" />
+          <input className="input" value={studentId} onChange={(e) => setStudentId(e.target.value)} placeholder="Schüler-Code (z.B. S0001)" />
+        </div>
+
+        <div style={{ height: 10 }} />
+
+        <div className="row">
+          <label className="badge" style={{ cursor: 'pointer' }}>
+            <input
+              type="checkbox"
+              checked={isGu}
+              onChange={(e) => setIsGu(e.target.checked)}
+              style={{ marginRight: 8 }}
+            />
+            GU (aus) / Regel (an) → aktuell: <b>{isGu ? 'GU' : 'Regel'}</b>
+          </label>
+
+          <select className="select" value={religion ?? ''} onChange={(e) => setReligion(e.target.value as any)} style={{ maxWidth: 180 }}>
+            {REL_OPTIONS.map((r) => (
+              <option key={r} value={r}>{r}</option>
+            ))}
+          </select>
+
+          <select
+            className="select"
+            value={course ?? ''}
+            onChange={(e) => setCourse((e.target.value || null) as any)}
+            style={{ maxWidth: 240 }}
+          >
+            <option value="">Kurs: keiner</option>
+            {COURSE_OPTIONS.map((c) => (
+              <option key={c!} value={c!}>{c}</option>
+            ))}
+          </select>
+
+          <label className="badge" style={{ cursor: 'pointer' }}>
+            <input
+              type="checkbox"
+              checked={active}
+              onChange={(e) => setActive(e.target.checked)}
+              style={{ marginRight: 8 }}
+            />
+            aktiv
+          </label>
+
+          <div className="spacer" />
+          <button className="btn ok" onClick={saveStudent}>Speichern</button>
+        </div>
+
+        {showCourseHint && (
+          <div className="small" style={{ marginTop: 8, opacity: 0.85 }}>
+            Hinweis: Klasse <b>{classId}</b> (ab Stufe 7) → Kurs kann gesetzt werden (Bio/Chemie/Sowi/Informatik/Arbeitslehre).
+          </div>
+        )}
+
+        {msg && (
+          <>
+            <hr className="sep" />
+            <div className="small" style={{ color: 'rgba(255,93,108,.95)', whiteSpace: 'pre-wrap' }}>{msg}</div>
+          </>
+        )}
+        {ok && (
+          <>
+            <hr className="sep" />
+            <div className="small" style={{ color: 'rgba(46,229,157,.95)', fontWeight: 800 }}>{ok}</div>
+          </>
+        )}
+
+        <hr className="sep" />
+
+        <div className="badge">Buch scannen (optional)</div>
+        <div style={{ height: 8 }} />
+        <div className="row">
+          <input className="input" value={bookCode} onChange={(e) => setBookCode(e.target.value)} placeholder="Buch-Code scannen" />
+          <button className="btn ok" onClick={assignBookToStudent}>Buch → Schüler</button>
+          <button className="btn secondary" onClick={assignBookToStorage}>Buch → Lager</button>
+        </div>
+
+        <hr className="sep" />
+
+        <div className="row">
+          <div className="badge">Gespeicherte Schüler</div>
+          <div className="spacer" />
+          <button className="btn secondary" onClick={loadStudents}>Liste aktualisieren</button>
+        </div>
+
+        {loadingList ? (
+          <div className="small" style={{ marginTop: 10 }}>Lade…</div>
+        ) : (
+          <div className="small" style={{ marginTop: 10, lineHeight: 1.8 }}>
+            {filtered.length === 0 ? (
+              <div>Keine Treffer.</div>
+            ) : (
+              filtered.map((r) => (
+                <div key={r.student_id} style={{ display: 'flex', gap: 10, alignItems: 'center' }}>
+                  <button className="btn secondary" style={{ padding: '6px 10px' }} onClick={() => loadIntoForm(r)}>
+                    Bearbeiten
+                  </button>
+                  <div>
+                    <b>{r.student_id}</b> — Klasse: <b>{r.class_id ?? '-'}</b> — {r.is_gu ? 'GU' : 'Regel'} — Reli:{' '}
+                    <b>{r.religion ?? '-'}</b> — Kurs: <b>{r.course ?? '-'}</b> — aktiv: {String(r.active ?? true)}
+                    {selected === r.student_id ? <span className="badge" style={{ marginLeft: 8 }}>ausgewählt</span> : null}
+                  </div>
+                </div>
+              ))
+            )}
+          </div>
+        )}
+      </div>
     </div>
   );
 }
