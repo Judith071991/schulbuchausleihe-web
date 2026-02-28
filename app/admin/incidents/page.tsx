@@ -1,8 +1,8 @@
 'use client';
 
 import { useEffect, useMemo, useRef, useState } from 'react';
-import Topbar from '../../../components/Topbar';
-import Modal from '../../../components/Modal';
+import Topbar from '../../components/Topbar';
+import Modal from '../../components/Modal';
 import { supabase } from '../../../lib/supabaseClient';
 import { fetchRole } from '../../../lib/role';
 
