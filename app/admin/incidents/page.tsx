@@ -3,8 +3,8 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import Topbar from '../../components/Topbar';
 import Modal from '../../components/Modal';
-import { supabase } from '../../../lib/supabaseClient';
-import { fetchRole } from '../../../lib/role';
+import { supabase } from '../../lib/supabaseClient';
+import { fetchRole } from '../../lib/role';
 
 type ClassRow = { class_id: string };
 
