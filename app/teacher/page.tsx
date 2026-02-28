@@ -5,34 +5,74 @@ import Topbar from '../../components/Topbar';
 import { supabase } from '../../lib/supabaseClient';
 import { fetchRole } from '../../lib/role';
 
+type Assignment = {
+  book_code: string;
+  holder_type: string;
+  holder_id: string;
+};
+
 export default function TeacherPage() {
   const [ready, setReady] = useState(false);
-  const [email, setEmail] = useState<string>('');
   const [msg, setMsg] = useState<string | null>(null);
+
+  const [email, setEmail] = useState<string>('');
+  const [role, setRole] = useState<string>('');
+  const [teacherId, setTeacherId] = useState<string>('');
+  const [items, setItems] = useState<Assignment[]>([]);
 
   useEffect(() => {
     (async () => {
+      setMsg(null);
+
       const { data } = await supabase.auth.getSession();
       if (!data.session) return (window.location.href = '/login');
 
-      setEmail(data.session.user?.email ?? '');
+      setEmail(data.session.user.email ?? '');
 
-      const role = await fetchRole();
+      const r = await fetchRole();
+      setRole(r);
 
-      // Admin soll NICHT hier landen
-      if (role === 'admin') return (window.location.href = '/admin');
+      // Admin soll NICHT in teacher landen
+      if (r === 'admin') return (window.location.href = '/admin');
 
-      // Nur teacher darf rein
-      if (role !== 'teacher') return (window.location.href = '/login');
+      // Erlaubt: teacher ODER teacher_readonly
+      if (r !== 'teacher' && r !== 'teacher_readonly') {
+        return (window.location.href = '/login');
+      }
+
+      // teacher_id holen (RPC existiert bei dir: sb_my_teacher_id)
+      const tidRes = await supabase.rpc('sb_my_teacher_id');
+      if (tidRes.error) {
+        setMsg(`Teacher-ID konnte nicht geladen werden: ${tidRes.error.message}`);
+      } else {
+        setTeacherId(String(tidRes.data ?? ''));
+      }
 
       setReady(true);
     })();
   }, []);
 
-  async function logout() {
-    await supabase.auth.signOut();
-    window.location.href = '/login';
-  }
+  useEffect(() => {
+    (async () => {
+      if (!ready || !teacherId) return;
+
+      // Zuweisungen laden (vereinfachte Anzeige)
+      // Wenn deine Tabelle/VIEW anders heißt, sag kurz Bescheid – dann passen wir’s an.
+      const { data, error } = await supabase
+        .from('sb_current_assignments')
+        .select('book_code, holder_type, holder_id')
+        .eq('holder_type', 'teacher')
+        .eq('holder_id', teacherId)
+        .order('book_code', { ascending: true });
+
+      if (error) {
+        setMsg(`Zuweisungen konnten nicht geladen werden: ${error.message}`);
+        setItems([]);
+      } else {
+        setItems((data ?? []) as any);
+      }
+    })();
+  }, [ready, teacherId]);
 
   if (!ready) {
     return (
@@ -40,7 +80,6 @@ export default function TeacherPage() {
         <div className="card">
           <div className="h1">Lehrkräfte</div>
           <p className="sub">Lade…</p>
-          {msg && <p className="small" style={{ color: 'rgba(255,93,108,.95)' }}>{msg}</p>}
         </div>
       </div>
     );
@@ -48,30 +87,48 @@ export default function TeacherPage() {
 
   return (
     <div className="container">
-      <Topbar title="Lehrkräfte" />
+      <Topbar title="Lehrkräfte (Ansicht)" />
 
       <div className="card">
         <div className="row">
-          <div>
-            <div className="h1">Lehrkräfte-Ansicht</div>
-            <div className="small">Eingeloggt: <span className="kbd">{email}</span></div>
-            <div className="small">Rolle: <span className="kbd">teacher</span></div>
-          </div>
+          <div className="badge">Eingeloggt: {email || '—'}</div>
+          <div className="badge">Rolle: {role || '—'}</div>
+          <div className="badge">Teacher-ID: {teacherId || '—'}</div>
           <div className="spacer" />
-          <button className="btn secondary" onClick={logout}>Logout</button>
+          <button className="btn secondary" onClick={() => (window.location.href = '/admin')}>
+            Zum Admin-Dashboard
+          </button>
         </div>
 
-        <hr className="sep" />
+        <div style={{ height: 12 }} />
 
         <div className="small">
-          Diese Seite ist aktuell <b>nur Ansicht</b>. Scannen läuft über den Adminbereich.
+          Diese Seite ist aktuell <b>nur Ansicht</b>. Scannen/Ändern passiert im Admin-Bereich.
         </div>
 
-        <div style={{ height: 10 }} />
+        {msg && (
+          <>
+            <hr className="sep" />
+            <div className="small" style={{ color: 'rgba(255,93,108,.95)' }}>
+              {msg}
+            </div>
+          </>
+        )}
 
-        <button className="btn ok" onClick={() => (window.location.href = '/admin')}>
-          Zum Adminbereich (falls freigeschaltet)
-        </button>
+        <hr className="sep" />
+        <div className="h2">Meine ausgeliehenen Bücher</div>
+
+        {items.length === 0 ? (
+          <div className="small">Keine Bücher zugeordnet.</div>
+        ) : (
+          <div className="small" style={{ lineHeight: 1.8 }}>
+            {items.map((x) => (
+              <div key={x.book_code}>
+                • <span className="kbd">{x.book_code}</span>
+              </div>
+            ))}
+          </div>
+        )}
       </div>
     </div>
   );
