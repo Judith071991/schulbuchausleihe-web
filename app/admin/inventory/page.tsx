@@ -2,8 +2,8 @@
 
 import { useEffect, useState } from 'react';
 import Topbar from '../../components/Topbar';
-import { supabase } from '../../lib/supabaseClient';
-import { fetchRole } from '../../lib/role';
+import { supabase } from '../../../lib/supabaseClient';
+import { fetchRole } from '../../../lib/role';
 
 export default function AdminInventoryPage() {
   const [ready, setReady] = useState(false);
