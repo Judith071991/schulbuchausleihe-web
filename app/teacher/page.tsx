@@ -36,7 +36,7 @@ export default function TeacherPage() {
       if (r === 'admin') return (window.location.href = '/admin');
 
       // Erlaubt: teacher ODER teacher_readonly
-      if (r !== 'teacher' && r !== 'teacher_readonly') {
+      if (r !== 'teacher_readonly') {
         return (window.location.href = '/login');
       }
 
