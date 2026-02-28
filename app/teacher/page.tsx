@@ -242,8 +242,8 @@ export default function TeacherPage() {
       // Admin soll NICHT in teacher landen
       if (r === 'admin') return (window.location.href = '/admin');
 
-      // Erlaubt: teacher ODER teacher_readonly
-      if (!(r === 'teacher' || r === 'teacher_readonly')) {
+      // Erlaubt: teacher_readonly
+      if (!(r === 'teacher_readonly')) {
         return (window.location.href = '/login');
       }
 
