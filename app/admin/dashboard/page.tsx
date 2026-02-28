@@ -43,6 +43,9 @@ export default function AdminDashboardPage() {
           <button className="btn" onClick={() => (window.location.href = '/admin/inventory')}>
             Bestand / Titel & Bücher
           </button>
+         <button className="btn ok" onClick={() => (window.location.href = '/admin/required')}>
+  Soll-Listen
+</button>
           <button className="btn" onClick={() => (window.location.href = '/admin/students')}>
             Schüler
           </button>
