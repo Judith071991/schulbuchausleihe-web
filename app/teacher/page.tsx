@@ -1,206 +1,207 @@
 'use client';
 
 import { useEffect, useMemo, useState } from 'react';
-import Topbar from '../../components/Topbar';
-import Modal from '../../components/Modal';
-import { supabase } from '../../lib/supabaseClient';
-import { fetchRole } from '../../lib/role';
+import Topbar from '../../../components/Topbar';
+import Modal from '../../../components/Modal';
+import { supabase } from '../../../lib/supabaseClient';
+import { fetchRole } from '../../../lib/role';
 
-type BookRow = {
-  class_id: string;
-  student_id: string;
-  subject: string;
-  title_id: string;
-  title_name: string;
-  status: string;
-};
+type TeacherRow = { teacher_id: string };
 
-type SummaryRow = {
-  class_id: string;
-  student_id: string;
-  ok_count: number;
-  missing_count: number;
-  return_count: number;
-};
-
-export default function TeacherPage() {
+export default function AdminTeachersPage() {
   const [ready, setReady] = useState(false);
-  const [classId, setClassId] = useState('');
-  const [studentQuery, setStudentQuery] = useState('');
-  const [statusFilter, setStatusFilter] = useState<'all'|'missing'|'ok'|'return'>('all');
-  const [rows, setRows] = useState<BookRow[]>([]);
-  const [summary, setSummary] = useState<SummaryRow[]>([]);
-  const [msg, setMsg] = useState<string|null>(null);
+  const [msg, setMsg] = useState<string | null>(null);
+  const [ok, setOk] = useState<string | null>(null);
+
+  const [teacherId, setTeacherId] = useState('');
+  const [scan, setScan] = useState('');
+
+  const [teachers, setTeachers] = useState<TeacherRow[]>([]);
+  const filtered = useMemo(() => {
+    const q = teacherId.trim();
+    if (!q) return teachers;
+    return teachers.filter(t => t.teacher_id.toLowerCase().includes(q.toLowerCase()));
+  }, [teachers, teacherId]);
 
   const [modalOpen, setModalOpen] = useState(false);
-  const [modalData, setModalData] = useState<BookRow|null>(null);
+  const [modalText, setModalText] = useState('');
 
   useEffect(() => {
     (async () => {
       const { data } = await supabase.auth.getSession();
-      if(!data.session) return (window.location.href='/login');
+      if (!data.session) return (window.location.href = '/login');
       const role = await fetchRole();
-      if(role !== 'admin' && role !== 'teacher_readonly') return (window.location.href='/login');
+      if (role !== 'admin') return (window.location.href = '/teacher');
       setReady(true);
-      await runQuery();
+      await loadTeachers();
     })();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  async function runQuery(){
-    setMsg(null);
+  async function loadTeachers() {
+    // ⚠️ Falls deine Tabelle anders heißt: hier anpassen (z.B. sb_teachers)
+    const { data, error } = await supabase
+      .from('sb_teachers')
+      .select('teacher_id')
+      .order('teacher_id', { ascending: true });
 
-    let q = supabase.from('v_teacher_student_book_status').select('*')
-      .order('class_id').order('student_id').order('subject');
-    if(classId.trim()) q = q.eq('class_id', classId.trim());
-    if(studentQuery.trim()) q = q.ilike('student_id', `%${studentQuery.trim()}%`);
-    const { data: d1, error: e1 } = await q;
-    if(e1){ setMsg(`Fehler (v_teacher_student_book_status): ${e1.message}`); setRows([]); return; }
-    setRows((d1 ?? []) as any as BookRow[]);
-
-    let q2 = supabase.from('v_teacher_class_student_summary').select('*')
-      .order('class_id').order('student_id');
-    if(classId.trim()) q2 = q2.eq('class_id', classId.trim());
-    if(studentQuery.trim()) q2 = q2.ilike('student_id', `%${studentQuery.trim()}%`);
-    const { data: d2, error: e2 } = await q2;
-    if(e2){ setMsg(`Fehler (v_teacher_class_student_summary): ${e2.message}`); setSummary([]); }
-    else setSummary((d2 ?? []) as any as SummaryRow[]);
+    if (error) {
+      setMsg(error.message);
+      return;
+    }
+    setTeachers((data ?? []) as any);
   }
 
-  const filtered = useMemo(() => {
-    if(statusFilter==='all') return rows;
-    return rows.filter(r => (r.status ?? '').toLowerCase() === statusFilter);
-  }, [rows, statusFilter]);
+  async function upsertTeacher() {
+    setMsg(null); setOk(null);
+    try {
+      const tid = teacherId.trim();
+      if (!tid) throw new Error('Bitte Lehrer-ID eingeben/scannen.');
 
-  const classOptions = useMemo(() => {
-    const set = new Set(rows.map(r=>r.class_id).filter(Boolean));
-    return Array.from(set).sort();
-  }, [rows]);
+      const { error } = await supabase
+        .from('sb_teachers')
+        .upsert({ teacher_id: tid }, { onConflict: 'teacher_id' });
 
-  function openMissing(r:BookRow){
-    setModalData(r); setModalOpen(true);
+      if (error) throw error;
+      setOk('Lehrkraft gespeichert.');
+      await loadTeachers();
+    } catch (e: any) {
+      setMsg(e?.message ?? 'Unbekannter Fehler');
+    }
   }
 
-  if(!ready){
-    return <div className="container"><div className="card"><div className="h1">Schulbuchausleihe</div><p className="sub">Lade…</p></div></div>;
+  async function issueBookToTeacher() {
+    setMsg(null); setOk(null);
+    try {
+      const tid = teacherId.trim();
+      const code = scan.trim();
+      if (!tid) throw new Error('Erst Lehrer-ID setzen/scannen.');
+      if (!code) throw new Error('Buch-Code fehlt.');
+
+      // ✅ Buch -> Lehrkraft
+      const { error } = await supabase.rpc('sb_issue_to_teacher', {
+        p_scan: code,
+        p_teacher_id: tid,
+        p_note: null,
+      });
+      if (error) throw error;
+
+      setOk(`Buch ${code} zu Lehrkraft ${tid} zugewiesen.`);
+      setScan('');
+    } catch (e: any) {
+      setMsg(e?.message ?? 'Unbekannter Fehler');
+    }
+  }
+
+  async function returnBookToStorage() {
+    setMsg(null); setOk(null);
+    try {
+      const code = scan.trim();
+      if (!code) throw new Error('Buch-Code fehlt.');
+
+      const { error } = await supabase.rpc('sb_return_book', {
+        p_scan: code,
+      });
+      if (error) throw error;
+
+      setOk(`Buch ${code} ins Lager zurückgebucht.`);
+      setScan('');
+    } catch (e: any) {
+      setMsg(e?.message ?? 'Unbekannter Fehler');
+    }
+  }
+
+  function openHelp(text: string) {
+    setModalText(text);
+    setModalOpen(true);
+  }
+
+  if (!ready) {
+    return (
+      <div className="container">
+        <div className="card">
+          <div className="h1">Lehrkräfte</div>
+          <p className="sub">Lade…</p>
+        </div>
+      </div>
+    );
   }
 
   return (
     <div className="container">
-      <Topbar title="Lehrkräfte" />
+      <Topbar title="Admin · Lehrkräfte" />
 
       <div className="card">
         <div className="row">
-          <div className="badge">Suche & Filter</div>
+          <div className="badge">Lehrkräfte · Scannen & Zuweisen</div>
           <div className="spacer" />
-          <button className="btn secondary" onClick={runQuery}>Aktualisieren</button>
+          <button className="btn secondary" onClick={() => (window.location.href = '/admin')}>← Dashboard</button>
+          <button className="btn secondary" onClick={() => (window.location.href = '/teacher')}>Zur Lehrkräfte-Ansicht</button>
         </div>
-        <div style={{height:12}} />
-        <div className="row">
-          <input className="input" placeholder="Schülernummer suchen (z.B. S-BLEISTIFT-003)"
-            value={studentQuery} onChange={(e)=>setStudentQuery(e.target.value)} />
-          <select className="select" value={classId} onChange={(e)=>setClassId(e.target.value)} style={{maxWidth:220}}>
-            <option value="">Alle Klassen</option>
-            {classOptions.map(c => <option key={c} value={c}>{c}</option>)}
-          </select>
 
-          <div className="spacer" />
-          <button className={statusFilter==='all'?'btn':'btn secondary'} onClick={()=>setStatusFilter('all')}>Alle</button>
-          <button className={statusFilter==='missing'?'btn danger':'btn secondary'} onClick={()=>setStatusFilter('missing')}>Missing</button>
-          <button className={statusFilter==='return'?'btn':'btn secondary'} onClick={()=>setStatusFilter('return')}>Return</button>
-          <button className={statusFilter==='ok'?'btn ok':'btn secondary'} onClick={()=>setStatusFilter('ok')}>OK</button>
+        <div style={{ height: 12 }} />
+
+        <div className="row">
+          <input
+            className="input"
+            value={teacherId}
+            onChange={(e) => setTeacherId(e.target.value)}
+            placeholder="Lehrer-ID (teacher_id) scannen/eingeben"
+            style={{ maxWidth: 380 }}
+          />
+          <button className="btn ok" onClick={upsertTeacher}>Lehrkraft speichern</button>
+          <button className="btn secondary" onClick={() => openHelp('1) Lehrer-ID eingeben/scannen\n2) „Lehrkraft speichern“\n3) Bücher scannen: „Buch → Lehrkraft“\n4) Rückgabe: „Buch → Lager“')}>?</button>
+        </div>
+
+        <div style={{ height: 12 }} />
+        <hr className="sep" />
+
+        <div className="row">
+          <input
+            className="input"
+            value={scan}
+            onChange={(e) => setScan(e.target.value)}
+            placeholder="Buch-Code scannen"
+            style={{ maxWidth: 380 }}
+          />
+          <button className="btn ok" onClick={issueBookToTeacher}>Buch → Lehrkraft</button>
+          <button className="btn secondary" onClick={returnBookToStorage}>Buch → Lager</button>
         </div>
 
         {msg && <>
           <hr className="sep" />
-          <div className="small" style={{ color:'rgba(255,93,108,.95)' }}>{msg}</div>
+          <div className="small" style={{ color: 'rgba(255,93,108,.95)' }}>{msg}</div>
         </>}
-      </div>
-
-      <div style={{height:14}} />
-
-      <div className="card">
-        <div className="row">
-          <div className="badge">Übersicht je Schüler</div>
-          <div className="spacer" />
-          <div className="small">OK / Missing / Return</div>
-        </div>
-        <div style={{height:10}} />
-        <div className="tableWrap">
-          <table>
-            <thead><tr><th>Klasse</th><th>Schüler</th><th>OK</th><th>Missing</th><th>Return</th></tr></thead>
-            <tbody>
-              {summary.map(s => (
-                <tr key={`${s.class_id}-${s.student_id}`}>
-                  <td>{s.class_id}</td>
-                  <td><span className="kbd">{s.student_id}</span></td>
-                  <td>{s.ok_count}</td>
-                  <td style={{color:'rgba(255,93,108,.95)', fontWeight:800}}>{s.missing_count}</td>
-                  <td style={{color:'rgba(255,209,102,.95)', fontWeight:800}}>{s.return_count}</td>
-                </tr>
-              ))}
-              {summary.length===0 && <tr><td colSpan={5} className="small">Keine Daten.</td></tr>}
-            </tbody>
-          </table>
-        </div>
-      </div>
-
-      <div style={{height:14}} />
-
-      <div className="card">
-        <div className="row">
-          <div className="badge">Bücherstatus (Details)</div>
-          <div className="spacer" />
-          <div className="small">{filtered.length} Einträge</div>
-        </div>
-        <div style={{height:10}} />
-        <div className="tableWrap">
-          <table>
-            <thead><tr><th>Klasse</th><th>Schüler</th><th>Fach</th><th>Titel</th><th>Status</th><th>Aktion</th></tr></thead>
-            <tbody>
-              {filtered.map((r, idx) => (
-                <tr key={idx}>
-                  <td>{r.class_id}</td>
-                  <td><span className="kbd">{r.student_id}</span></td>
-                  <td>{r.subject}</td>
-                  <td>
-                    <div style={{fontWeight:800}}>{r.title_name}</div>
-                    <div className="small"><span className="kbd">{r.title_id}</span></div>
-                  </td>
-                  <td><span className={`status ${(r.status ?? '').toLowerCase()}`}>{(r.status ?? '').toLowerCase()}</span></td>
-                  <td>
-                    {String(r.status).toLowerCase()==='missing'
-                      ? <button className="btn danger" onClick={()=>openMissing(r)}>Pop-up für Screenshot</button>
-                      : <span className="small">—</span>}
-                  </td>
-                </tr>
-              ))}
-              {filtered.length===0 && <tr><td colSpan={6} className="small">Keine passenden Treffer.</td></tr>}
-            </tbody>
-          </table>
-        </div>
+        {ok && <>
+          <hr className="sep" />
+          <div className="small" style={{ color: 'rgba(46,229,157,.95)', fontWeight: 800 }}>{ok}</div>
+        </>}
 
         <hr className="sep" />
-        <div className="small">
-          Lehrkräfte sehen <b>alle Klassen</b> (wie gewünscht) – aber nur lesend.
+        <div className="small" style={{ marginBottom: 8, opacity: 0.9 }}>
+          Gespeicherte Lehrkräfte:
+        </div>
+
+        <div className="card" style={{ background: 'rgba(255,255,255,0.04)' }}>
+          {filtered.length === 0 ? (
+            <div className="small" style={{ opacity: 0.7 }}>Keine Treffer.</div>
+          ) : (
+            <div style={{ display: 'grid', gap: 8 }}>
+              {filtered.map(t => (
+                <div key={t.teacher_id} className="row" style={{ alignItems: 'center' }}>
+                  <div className="kbd">{t.teacher_id}</div>
+                  <div className="spacer" />
+                  <button className="btn secondary" onClick={() => setTeacherId(t.teacher_id)}>
+                    Als aktive Lehrkraft wählen
+                  </button>
+                </div>
+              ))}
+            </div>
+          )}
         </div>
       </div>
 
-      <Modal open={modalOpen} title="Buch fehlt – bitte neu kaufen" onClose={()=>setModalOpen(false)}>
-        {modalData && (
-          <div className="alertBox">
-            <div style={{fontSize:18, fontWeight:900, marginBottom:8, color:'#ffe6e8'}}>Fehlendes Buch (Missing)</div>
-            <div className="row">
-              <div className="badge">Klasse: <span className="kbd">{modalData.class_id}</span></div>
-              <div className="badge">Schüler: <span className="kbd">{modalData.student_id}</span></div>
-            </div>
-            <div style={{height:10}} />
-            <div style={{fontWeight:800}}>{modalData.title_name}</div>
-            <div className="small">Titel-ID: <span className="kbd">{modalData.title_id}</span> · Fach: {modalData.subject}</div>
-            <div style={{height:12}} />
-            <div className="small">Bitte jetzt Screenshot machen. Danach <b>Schließen</b>.</div>
-          </div>
-        )}
+      <Modal open={modalOpen} title="Hinweis" onClose={() => setModalOpen(false)}>
+        <pre style={{ whiteSpace: 'pre-wrap', margin: 0 }}>{modalText}</pre>
       </Modal>
     </div>
   );
