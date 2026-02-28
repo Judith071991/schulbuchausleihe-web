@@ -91,7 +91,7 @@ export default function AdminInventoryPage() {
   const [condition, setCondition] = useState<'ok' | 'used' | 'damaged'>('ok');
   const [putIntoStorage, setPutIntoStorage] = useState(true);
 
-  // ===== NEU: Auto-Fill Titelmeta + vorhandene Buchcodes =====
+  // ===== Auto-Fill Titelmeta + vorhandene Buchcodes =====
   const [autoLoading, setAutoLoading] = useState(false);
   const [autoErr, setAutoErr] = useState<string | null>(null);
   const [existingCodes, setExistingCodes] = useState<string>(''); // vorhandene Codes des Titels (nur Anzeige)
@@ -114,7 +114,6 @@ export default function AdminInventoryPage() {
       if (tErr) throw tErr;
 
       if (t) {
-        // nur automatisch setzen, wenn du nicht schon bewusst geändert hast
         if (!autoTouched) {
           setSubject((t as any).subject ?? '');
           setTitleName((t as any).title_name ?? '');
@@ -163,7 +162,10 @@ export default function AdminInventoryPage() {
   }, [summary, sumQuery]);
 
   const sumTotals = useMemo(() => {
-    let sStud = 0, sTeach = 0, sStor = 0, sTot = 0;
+    let sStud = 0,
+      sTeach = 0,
+      sStor = 0,
+      sTot = 0;
     for (const r of filteredSummary) {
       sStud += Number(r.cnt_students ?? 0);
       sTeach += Number(r.cnt_teachers ?? 0);
@@ -210,7 +212,10 @@ export default function AdminInventoryPage() {
   }, [checkRows, checkQuery]);
 
   const checkTotals = useMemo(() => {
-    let should = 0, isv = 0, miss = 0, extra = 0;
+    let should = 0,
+      isv = 0,
+      miss = 0,
+      extra = 0;
     for (const r of filteredCheckRows) {
       should += Number(r.cnt_should ?? 0);
       isv += Number(r.cnt_is ?? 0);
@@ -227,10 +232,11 @@ export default function AdminInventoryPage() {
       const cid = checkClassId.trim();
       if (!cid) throw new Error('Bitte Klasse eingeben (z.B. 5a).');
 
+      // WICHTIG: ilike statt eq (5B/5b/Leerzeichen)
       const { data, error } = await supabase
         .from('sb_class_required_check')
         .select('class_id,subject,title_id,title_name,isbn,price_eur,cnt_should,cnt_is,cnt_missing,cnt_extra')
-        .eq('class_id', cid)
+        .ilike('class_id', cid)
         .order('subject', { ascending: true })
         .order('title_name', { ascending: true });
 
@@ -245,7 +251,7 @@ export default function AdminInventoryPage() {
   }
   // ===== /Soll–Ist =====
 
-  // ===== NEU: „Fehlt → Jetzt zuweisen“ (Buchcode eingeben) =====
+  // ===== „Fehlt → Jetzt zuweisen“ (Buchcode eingeben) =====
   const [assignOpen, setAssignOpen] = useState(false);
   const [assignTitle, setAssignTitle] = useState<{ title_id: string; title_name?: string | null; subject?: string | null } | null>(null);
   const [assignBookCode, setAssignBookCode] = useState('');
@@ -276,7 +282,7 @@ export default function AdminInventoryPage() {
     const { data: studs, error: e1 } = await supabase
       .from('sb_students')
       .select('student_id,class_id,is_gu,religion,course,active')
-      .eq('class_id', p_class_id)
+      .ilike('class_id', (p_class_id || '').trim()) // WICHTIG: ilike
       .order('student_id', { ascending: true });
 
     if (e1) throw e1;
@@ -331,7 +337,6 @@ export default function AdminInventoryPage() {
       await loadClassCheck();
       await loadSummary();
 
-      // falls wir aus dem Schülerblock heraus zugewiesen haben, den ebenfalls aktualisieren
       if (checkStudentId.trim()) {
         await loadStudentCheck();
       }
@@ -341,9 +346,9 @@ export default function AdminInventoryPage() {
       setAssignBusy(false);
     }
   }
-  // ===== /NEU =====
+  // ===== /Zuweisen =====
 
-  // ===== NEU: Soll–Ist pro Schüler (View sb_student_required_check) =====
+  // ===== Soll–Ist pro Schüler =====
   const [checkStudentId, setCheckStudentId] = useState('S0001');
   const [studentClassId, setStudentClassId] = useState<string>('');
   const [studentRows, setStudentRows] = useState<StudentRequiredRow[]>([]);
@@ -361,7 +366,10 @@ export default function AdminInventoryPage() {
   }, [studentRows, studentQuery]);
 
   const studentTotals = useMemo(() => {
-    let should = 0, isv = 0, miss = 0, extra = 0;
+    let should = 0,
+      isv = 0,
+      miss = 0,
+      extra = 0;
     for (const r of filteredStudentRows) {
       should += Number(r.cnt_should ?? 0);
       isv += Number(r.cnt_is ?? 0);
@@ -378,7 +386,6 @@ export default function AdminInventoryPage() {
       const sid = checkStudentId.trim();
       if (!sid) throw new Error('Bitte Schülercode eingeben (z.B. S0001).');
 
-      // Klasse des Schülers holen (für Anzeige + Notiz)
       const { data: sData, error: sErr } = await supabase
         .from('sb_students')
         .select('student_id,class_id')
@@ -408,23 +415,19 @@ export default function AdminInventoryPage() {
   }
 
   function openAssignForStudent(r: StudentRequiredRow) {
-    // Klasse für Notizen setzen (wenn vorhanden)
     if (r.class_id) setCheckClassId(r.class_id);
     else if (studentClassId) setCheckClassId(studentClassId);
 
     setAssignOpen(true);
     setAssignTitle({ title_id: r.title_id, title_name: r.title_name, subject: r.subject });
-
-    // Schüler ist fest -> kein Auto-Suche nötig
     setAssignStudentId(r.student_id);
-
     setAssignBookCode('');
     setAssignMsg(null);
     setAssignOk(null);
   }
-  // ===== /NEU =====
+  // ===== /Soll–Ist pro Schüler =====
 
-  // ===== NEU: „Wer fehlt?“ → Liste der Schüler, denen ein Titel fehlt =====
+  // ===== „Wer fehlt?“ =====
   const [missingOpen, setMissingOpen] = useState(false);
   const [missingTitle, setMissingTitle] = useState<{ title_id: string; title_name?: string | null; subject?: string | null } | null>(null);
   const [missingRows, setMissingRows] = useState<MissingStudentRow[]>([]);
@@ -445,7 +448,7 @@ export default function AdminInventoryPage() {
       const { data, error } = await supabase
         .from('sb_class_title_missing_students')
         .select('class_id,student_id,title_id,subject,title_name,isbn,price_eur')
-        .eq('class_id', cid)
+        .ilike('class_id', cid) // WICHTIG: ilike
         .eq('title_id', r.title_id)
         .order('student_id', { ascending: true });
 
@@ -465,7 +468,7 @@ export default function AdminInventoryPage() {
     setMissingRows([]);
     setMissingErr(null);
   }
-  // ===== /NEU =====
+  // ===== /Wer fehlt =====
 
   useEffect(() => {
     (async () => {
@@ -476,7 +479,6 @@ export default function AdminInventoryPage() {
       setReady(true);
 
       loadSummary();
-      // optional: beim Laden einmal Titelmeta ziehen für Startwert
       autoFillFromTitle(titleId);
     })();
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -511,7 +513,6 @@ export default function AdminInventoryPage() {
       setOk('Erfolgreich gespeichert.');
 
       loadSummary();
-      // nach speichern: titel-codes neu laden
       autoFillFromTitle(titleId);
     } catch (e: any) {
       setMsg(e?.message ?? 'Unbekannter Fehler');
@@ -605,7 +606,7 @@ export default function AdminInventoryPage() {
           <button
             className="btn secondary"
             onClick={() => {
-              setAutoTouched(false); // damit wieder automatisch setzen darf
+              setAutoTouched(false);
               autoFillFromTitle(titleId);
             }}
             disabled={autoLoading}
@@ -719,7 +720,6 @@ export default function AdminInventoryPage() {
         <div className="row">
           <div className="badge">Übersicht je Titel: Schüler / Lehrer / Lager</div>
           <div className="spacer" />
-
           <button className="btn secondary" onClick={loadSummary} disabled={sumLoading}>
             {sumLoading ? 'Lade…' : 'Aktualisieren'}
           </button>
@@ -781,9 +781,7 @@ export default function AdminInventoryPage() {
                     <td style={{ padding: 8, opacity: 0.9 }}>{r.subject ?? '-'}</td>
                     <td style={{ padding: 8 }}>
                       <div style={{ fontWeight: 800 }}>{r.title_name ?? r.title_id}</div>
-                      <div className="small" style={{ opacity: 0.75 }}>
-                        {r.title_id}
-                      </div>
+                      <div className="small" style={{ opacity: 0.75 }}>{r.title_id}</div>
                     </td>
                     <td style={{ padding: 8, opacity: 0.9 }}>{r.isbn ?? '-'}</td>
                     <td style={{ padding: 8, opacity: 0.9 }}>{euro(r.price_eur)}</td>
@@ -840,12 +838,8 @@ export default function AdminInventoryPage() {
           <div className="badge">Titel: {filteredCheckRows.length}</div>
           <div className="badge">Soll: {checkTotals.should}</div>
           <div className="badge">Ist: {checkTotals.isv}</div>
-          <div className="badge" style={{ borderColor: 'rgba(255,93,108,.6)' }}>
-            Fehlt: {checkTotals.miss}
-          </div>
-          <div className="badge" style={{ borderColor: 'rgba(255,188,66,.6)' }}>
-            Zu viel: {checkTotals.extra}
-          </div>
+          <div className="badge" style={{ borderColor: 'rgba(255,93,108,.6)' }}>Fehlt: {checkTotals.miss}</div>
+          <div className="badge" style={{ borderColor: 'rgba(255,188,66,.6)' }}>Zu viel: {checkTotals.extra}</div>
         </div>
 
         {checkErr ? (
@@ -892,32 +886,16 @@ export default function AdminInventoryPage() {
                       <td style={{ padding: 8, opacity: 0.9 }}>{r.subject ?? '-'}</td>
                       <td style={{ padding: 8 }}>
                         <div style={{ fontWeight: 800 }}>{r.title_name ?? r.title_id}</div>
-                        <div className="small" style={{ opacity: 0.75 }}>
-                          {r.title_id}
-                        </div>
+                        <div className="small" style={{ opacity: 0.75 }}>{r.title_id}</div>
                       </td>
                       <td style={{ padding: 8, opacity: 0.9 }}>{r.isbn ?? '-'}</td>
                       <td style={{ padding: 8, opacity: 0.9 }}>{euro(r.price_eur)}</td>
                       <td style={{ padding: 8, textAlign: 'right' }}>{Number(r.cnt_should ?? 0)}</td>
                       <td style={{ padding: 8, textAlign: 'right' }}>{Number(r.cnt_is ?? 0)}</td>
-                      <td
-                        style={{
-                          padding: 8,
-                          textAlign: 'right',
-                          fontWeight: 800,
-                          color: missing > 0 ? 'rgba(255,93,108,.95)' : 'rgba(255,255,255,0.85)',
-                        }}
-                      >
+                      <td style={{ padding: 8, textAlign: 'right', fontWeight: 800, color: missing > 0 ? 'rgba(255,93,108,.95)' : 'rgba(255,255,255,0.85)' }}>
                         {missing}
                       </td>
-                      <td
-                        style={{
-                          padding: 8,
-                          textAlign: 'right',
-                          fontWeight: 800,
-                          color: extra > 0 ? 'rgba(255,188,66,.95)' : 'rgba(255,255,255,0.85)',
-                        }}
-                      >
+                      <td style={{ padding: 8, textAlign: 'right', fontWeight: 800, color: extra > 0 ? 'rgba(255,188,66,.95)' : 'rgba(255,255,255,0.85)' }}>
                         {extra}
                       </td>
                       <td style={{ padding: 8 }}>
@@ -928,11 +906,7 @@ export default function AdminInventoryPage() {
                             <button className="btn ok" style={{ padding: '6px 10px' }} onClick={() => openAssign(r)}>
                               Jetzt zuweisen
                             </button>
-                            <button
-                              className="btn secondary"
-                              style={{ padding: '6px 10px' }}
-                              onClick={() => loadMissingStudentsForTitle(r)}
-                            >
+                            <button className="btn secondary" style={{ padding: '6px 10px' }} onClick={() => loadMissingStudentsForTitle(r)}>
                               Wer fehlt?
                             </button>
                           </div>
@@ -952,9 +926,7 @@ export default function AdminInventoryPage() {
         {assignOpen && assignTitle ? (
           <>
             <hr className="sep" />
-            <div className="badge">
-              Jetzt zuweisen: {assignTitle.subject ?? ''} · {assignTitle.title_name ?? assignTitle.title_id}
-            </div>
+            <div className="badge">Jetzt zuweisen: {assignTitle.subject ?? ''} · {assignTitle.title_name ?? assignTitle.title_id}</div>
             <div style={{ height: 10 }} />
 
             <div className="row" style={{ flexWrap: 'wrap', gap: 10 }}>
@@ -987,30 +959,21 @@ export default function AdminInventoryPage() {
             ) : null}
 
             {assignOk ? (
-              <div
-                className="small"
-                style={{ marginTop: 10, color: 'rgba(46,229,157,.95)', fontWeight: 800, whiteSpace: 'pre-wrap' }}
-              >
+              <div className="small" style={{ marginTop: 10, color: 'rgba(46,229,157,.95)', fontWeight: 800, whiteSpace: 'pre-wrap' }}>
                 {assignOk}
               </div>
             ) : null}
-
-            <div className="small" style={{ marginTop: 8, opacity: 0.8 }}>
-              Hinweis: Wenn „Schüler-ID“ leer bleibt, wird automatisch der erste Schüler aus <b>{checkClassId}</b> gesucht, der dieses Buch noch nicht
-              hat.
-            </div>
           </>
         ) : null}
         {/* ===== /Zuweisungsfeld ===== */}
 
-        {/* ===== NEU: Fehlende Schüler anzeigen (Wer fehlt?) ===== */}
+        {/* ===== Fehlende Schüler anzeigen (Wer fehlt?) ===== */}
         {missingOpen && missingTitle ? (
           <>
             <hr className="sep" />
             <div className="row">
               <div className="badge">
-                Fehlt bei Schülern: {missingTitle.subject ?? ''} · {missingTitle.title_name ?? missingTitle.title_id} ({missingTitle.title_id}) · Klasse{' '}
-                {checkClassId}
+                Fehlt bei Schülern: {missingTitle.subject ?? ''} · {missingTitle.title_name ?? missingTitle.title_id} ({missingTitle.title_id}) · Klasse {checkClassId.trim()}
               </div>
               <div className="spacer" />
               <button className="btn secondary" onClick={closeMissing} disabled={missingLoading}>
@@ -1019,9 +982,7 @@ export default function AdminInventoryPage() {
             </div>
 
             {missingLoading ? (
-              <div className="small" style={{ marginTop: 10 }}>
-                Lade…
-              </div>
+              <div className="small" style={{ marginTop: 10 }}>Lade…</div>
             ) : missingErr ? (
               <div className="small" style={{ marginTop: 10, color: 'rgba(255,93,108,.95)', whiteSpace: 'pre-wrap' }}>
                 {missingErr}
@@ -1040,15 +1001,8 @@ export default function AdminInventoryPage() {
 
                     <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap' }}>
                       {missingRows.map((m) => (
-                        <span key={m.student_id} className="badge">
-                          {m.student_id}
-                        </span>
+                        <span key={m.student_id} className="badge">{m.student_id}</span>
                       ))}
-                    </div>
-
-                    <div className="small" style={{ marginTop: 8, opacity: 0.8 }}>
-                      Tipp: „Jetzt zuweisen“ beim Titel klicken → dann hier einen Schülercode in das Feld oben eintragen und Buchcode scannen.
-                      (Wenn du willst, baue ich dir hier pro Schülercode direkt einen „Zuweisen“-Button.)
                     </div>
                   </>
                 )}
@@ -1056,7 +1010,7 @@ export default function AdminInventoryPage() {
             )}
           </>
         ) : null}
-        {/* ===== /NEU ===== */}
+        {/* ===== /Wer fehlt ===== */}
 
         <div style={{ height: 6 }} />
         <div className="small" style={{ opacity: 0.75 }}>
@@ -1064,7 +1018,7 @@ export default function AdminInventoryPage() {
         </div>
       </div>
 
-      {/* ===== NEU: Soll–Ist Abgleich pro Schüler ===== */}
+      {/* ===== Soll–Ist Abgleich pro Schüler ===== */}
       <div className="card" style={{ marginTop: 14 }}>
         <div className="row">
           <div className="badge">Soll–Ist Abgleich pro Schüler (Schülercode)</div>
@@ -1088,9 +1042,7 @@ export default function AdminInventoryPage() {
             Abgleich laden
           </button>
 
-          <div className="badge">
-            Klasse: <b>{studentClassId || '-'}</b>
-          </div>
+          <div className="badge">Klasse: <b>{studentClassId || '-'}</b></div>
 
           <input
             className="input"
@@ -1104,12 +1056,8 @@ export default function AdminInventoryPage() {
           <div className="badge">Titel: {filteredStudentRows.length}</div>
           <div className="badge">Soll: {studentTotals.should}</div>
           <div className="badge">Ist: {studentTotals.isv}</div>
-          <div className="badge" style={{ borderColor: 'rgba(255,93,108,.6)' }}>
-            Fehlt: {studentTotals.miss}
-          </div>
-          <div className="badge" style={{ borderColor: 'rgba(255,188,66,.6)' }}>
-            Zu viel: {studentTotals.extra}
-          </div>
+          <div className="badge" style={{ borderColor: 'rgba(255,93,108,.6)' }}>Fehlt: {studentTotals.miss}</div>
+          <div className="badge" style={{ borderColor: 'rgba(255,188,66,.6)' }}>Zu viel: {studentTotals.extra}</div>
         </div>
 
         {studentErr ? (
@@ -1156,32 +1104,16 @@ export default function AdminInventoryPage() {
                       <td style={{ padding: 8, opacity: 0.9 }}>{r.subject ?? '-'}</td>
                       <td style={{ padding: 8 }}>
                         <div style={{ fontWeight: 800 }}>{r.title_name ?? r.title_id}</div>
-                        <div className="small" style={{ opacity: 0.75 }}>
-                          {r.title_id}
-                        </div>
+                        <div className="small" style={{ opacity: 0.75 }}>{r.title_id}</div>
                       </td>
                       <td style={{ padding: 8, opacity: 0.9 }}>{r.isbn ?? '-'}</td>
                       <td style={{ padding: 8, opacity: 0.9 }}>{euro(r.price_eur)}</td>
                       <td style={{ padding: 8, textAlign: 'right' }}>{Number(r.cnt_should ?? 0)}</td>
                       <td style={{ padding: 8, textAlign: 'right' }}>{Number(r.cnt_is ?? 0)}</td>
-                      <td
-                        style={{
-                          padding: 8,
-                          textAlign: 'right',
-                          fontWeight: 800,
-                          color: missing > 0 ? 'rgba(255,93,108,.95)' : 'rgba(255,255,255,0.85)',
-                        }}
-                      >
+                      <td style={{ padding: 8, textAlign: 'right', fontWeight: 800, color: missing > 0 ? 'rgba(255,93,108,.95)' : 'rgba(255,255,255,0.85)' }}>
                         {missing}
                       </td>
-                      <td
-                        style={{
-                          padding: 8,
-                          textAlign: 'right',
-                          fontWeight: 800,
-                          color: extra > 0 ? 'rgba(255,188,66,.95)' : 'rgba(255,255,255,0.85)',
-                        }}
-                      >
+                      <td style={{ padding: 8, textAlign: 'right', fontWeight: 800, color: extra > 0 ? 'rgba(255,188,66,.95)' : 'rgba(255,255,255,0.85)' }}>
                         {extra}
                       </td>
                       <td style={{ padding: 8 }}>
@@ -1208,7 +1140,7 @@ export default function AdminInventoryPage() {
           Quelle: View <b>sb_student_required_check</b>
         </div>
       </div>
-      {/* ===== /NEU ===== */}
+      {/* ===== /Soll–Ist pro Schüler ===== */}
     </div>
   );
 }
