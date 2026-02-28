@@ -1,10 +1,10 @@
 'use client';
 
 import { useEffect, useMemo, useState } from 'react';
-import Topbar from '../../../components/Topbar';
-import Modal from '../../../components/Modal';
-import { supabase } from '../../../lib/supabaseClient';
-import { fetchRole } from '../../../lib/role';
+import Topbar from '../../components/Topbar';
+import Modal from '../../components/Modal';
+import { supabase } from '../../lib/supabaseClient';
+import { fetchRole } from '../../lib/role';
 
 type TeacherRow = { teacher_id: string };
 
