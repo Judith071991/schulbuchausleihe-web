@@ -20,9 +20,8 @@ type BookMeta = {
 type Line = {
   book_code: string;
   meta?: BookMeta;
-  // Auswahl
   mode: 'full' | 'damage5' | 'damage10' | 'custom';
-  customAmount: string; // für custom
+  customAmount: string;
   note?: string;
 };
 
@@ -41,24 +40,18 @@ export default function AdminIncidentsPage() {
   const [msg, setMsg] = useState<string | null>(null);
   const [ok, setOk] = useState<string | null>(null);
 
-  // Klassen
   const [classes, setClasses] = useState<ClassRow[]>([]);
   const [classId, setClassId] = useState('5a');
 
-  // Schüler
   const [studentId, setStudentId] = useState('');
 
-  // Buch scan/input
   const [bookInput, setBookInput] = useState('');
   const bookInputRef = useRef<HTMLInputElement | null>(null);
 
-  // Liste
   const [lines, setLines] = useState<Line[]>([]);
 
-  // Pop-up
   const [showPrint, setShowPrint] = useState(false);
 
-  // speichern
   const [alsoSave, setAlsoSave] = useState(true);
   const [paymentMode, setPaymentMode] = useState<'cash' | 'transfer' | 'unknown'>('unknown');
 
@@ -69,7 +62,6 @@ export default function AdminIncidentsPage() {
       const role = await fetchRole();
       if (role !== 'admin') return (window.location.href = '/teacher');
 
-      // Klassen laden (falls Tabelle existiert)
       const c = await supabase.from('sb_classes').select('class_id').order('class_id');
       if (!c.error && c.data) {
         setClasses(c.data as any);
@@ -81,9 +73,7 @@ export default function AdminIncidentsPage() {
     })();
   }, []);
 
-  // Meta-Daten für einen Buchcode holen
   async function fetchBookMeta(code: string): Promise<BookMeta> {
-    // sb_books(book_code, title_id) + sb_titles(title_id, subject, title_name, isbn, price_eur)
     const { data, error } = await supabase
       .from('sb_books')
       .select('book_code, title_id, sb_titles:sb_titles(subject, title_name, isbn, price_eur)')
@@ -111,7 +101,6 @@ export default function AdminIncidentsPage() {
     const code = raw.trim();
     if (!code) return;
 
-    // Duplikat-Warnung: trotzdem erlauben (wie bei dir generell)
     const already = lines.some((l) => l.book_code === code);
 
     try {
@@ -159,12 +148,8 @@ export default function AdminIncidentsPage() {
     if (!classId.trim()) throw new Error('Bitte Klasse wählen.');
     if (!sid) throw new Error('Bitte Schülercode eingeben.');
     if (lines.length === 0) throw new Error('Bitte mindestens einen Buchcode hinzufügen.');
-
-    // Optional: prüfen, ob Schüler wirklich in dieser Klasse ist (nur Warnung)
-    // Wir machen das nicht hart, damit du flexibel bleibst.
   }
 
-  // Speichern in Supabase (pro Buch ein Issue-Event)
   async function saveAllIssues() {
     const sid = studentId.trim();
 
@@ -191,7 +176,6 @@ export default function AdminIncidentsPage() {
               ? 'damage_major'
               : 'damage_custom';
 
-      // sb_report_issue(...) existiert bei dir (hatten wir in der Routine-Liste)
       const { error } = await supabase.rpc('sb_report_issue', {
         p_scan: code,
         p_student_id: sid,
@@ -212,7 +196,6 @@ export default function AdminIncidentsPage() {
     try {
       validate();
 
-      // optional speichern
       if (alsoSave) {
         await saveAllIssues();
         setOk('Gespeichert. Pop-up wird geöffnet…');
@@ -264,7 +247,6 @@ export default function AdminIncidentsPage() {
 
         <div style={{ height: 12 }} />
 
-        {/* Klasse + Schüler */}
         <div className="row" style={{ flexWrap: 'wrap', gap: 10 }}>
           <select className="select" value={classId} onChange={(e) => setClassId(e.target.value)} style={{ maxWidth: 160 }}>
             {classes.length === 0 ? <option value={classId}>{classId}</option> : null}
@@ -302,7 +284,6 @@ export default function AdminIncidentsPage() {
 
         <div style={{ height: 10 }} />
 
-        {/* Buchscan */}
         <div className="row" style={{ flexWrap: 'wrap', gap: 10 }}>
           <input
             ref={bookInputRef}
@@ -343,7 +324,6 @@ export default function AdminIncidentsPage() {
 
         <hr className="sep" />
 
-        {/* Liste */}
         <div className="row">
           <div className="badge">Bücher ({lines.length})</div>
           <div className="spacer" />
@@ -445,99 +425,100 @@ export default function AdminIncidentsPage() {
       </div>
 
       {/* Druck-Pop-up */}
-      {showPrint && (
-        <Modal title="Ersatz / Beschädigung – Druckansicht" onClose={() => setShowPrint(false)}>
-          <div style={{ padding: 8 }}>
-            {/* Druck-CSS direkt inline */}
-            <style>{`
-              @media print {
-                .no-print { display: none !important; }
-                body { background: white !important; }
-              }
-              .print-sheet {
-                padding: 16px;
-                background: white;
-                color: black;
-                border-radius: 8px;
-              }
-              .print-h1 { font-size: 18px; font-weight: 800; margin-bottom: 6px; }
-              .print-small { font-size: 12px; opacity: 0.9; }
-              .print-table { width: 100%; border-collapse: collapse; margin-top: 12px; }
-              .print-table th, .print-table td { border: 1px solid #222; padding: 6px; font-size: 12px; vertical-align: top; }
-            `}</style>
+      <Modal
+        open={showPrint}
+        title="Ersatz / Beschädigung – Druckansicht"
+        onClose={() => setShowPrint(false)}
+      >
+        <div style={{ padding: 8 }}>
+          <style>{`
+            @media print {
+              .no-print { display: none !important; }
+              body { background: white !important; }
+            }
+            .print-sheet {
+              padding: 16px;
+              background: white;
+              color: black;
+              border-radius: 8px;
+            }
+            .print-h1 { font-size: 18px; font-weight: 800; margin-bottom: 6px; }
+            .print-small { font-size: 12px; opacity: 0.9; }
+            .print-table { width: 100%; border-collapse: collapse; margin-top: 12px; }
+            .print-table th, .print-table td { border: 1px solid #222; padding: 6px; font-size: 12px; vertical-align: top; }
+          `}</style>
 
-            <div className="print-sheet">
-              <div className="print-h1">Schulbuchausleihe – Ersatz / Beschädigung</div>
-              <div className="print-small">
-                Klasse: <b>{classId}</b> &nbsp;|&nbsp; Schülercode: <b>{studentId.trim()}</b>
-              </div>
-              <div className="print-small">
-                Datum: <b>{new Date().toLocaleDateString('de-DE')}</b> &nbsp;|&nbsp; Gesamt: <b>{euro(total)}</b>
-              </div>
-
-              <table className="print-table">
-                <thead>
-                  <tr>
-                    <th>Buch</th>
-                    <th>Fach</th>
-                    <th>ISBN</th>
-                    <th>Buchcode</th>
-                    <th>Preis</th>
-                    <th>Auswahl</th>
-                    <th>Betrag</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {lines.map((l, i) => {
-                    const amount =
-                      l.mode === 'full'
-                        ? l.meta?.price_eur ?? 0
-                        : l.mode === 'damage5'
-                          ? 5
-                          : l.mode === 'damage10'
-                            ? 10
-                            : parseNum(l.customAmount) ?? 0;
-
-                    const choice =
-                      l.mode === 'full'
-                        ? 'Ersatz (voll)'
-                        : l.mode === 'damage5'
-                          ? 'Beschädigt (5€)'
-                          : l.mode === 'damage10'
-                            ? 'Beschädigt (10€)'
-                            : 'Beschädigt (frei)';
-
-                    return (
-                      <tr key={i}>
-                        <td>{l.meta?.title_name ?? l.meta?.title_id ?? '-'}</td>
-                        <td>{l.meta?.subject ?? '-'}</td>
-                        <td>{l.meta?.isbn ?? '-'}</td>
-                        <td>{l.book_code}</td>
-                        <td>{euro(l.meta?.price_eur)}</td>
-                        <td>{choice}</td>
-                        <td>{euro(amount)}</td>
-                      </tr>
-                    );
-                  })}
-                </tbody>
-              </table>
-
-              <div style={{ marginTop: 14, fontSize: 12 }}>
-                Unterschrift Erziehungsberechtigte/r: ________________________________
-              </div>
+          <div className="print-sheet">
+            <div className="print-h1">Schulbuchausleihe – Ersatz / Beschädigung</div>
+            <div className="print-small">
+              Klasse: <b>{classId}</b> &nbsp;|&nbsp; Schülercode: <b>{studentId.trim()}</b>
+            </div>
+            <div className="print-small">
+              Datum: <b>{new Date().toLocaleDateString('de-DE')}</b> &nbsp;|&nbsp; Gesamt: <b>{euro(total)}</b>
             </div>
 
-            <div className="no-print" style={{ display: 'flex', gap: 10, marginTop: 12, justifyContent: 'flex-end' }}>
-              <button className="btn secondary" onClick={() => setShowPrint(false)}>
-                Schließen
-              </button>
-              <button className="btn ok" onClick={() => window.print()}>
-                Drucken
-              </button>
+            <table className="print-table">
+              <thead>
+                <tr>
+                  <th>Buch</th>
+                  <th>Fach</th>
+                  <th>ISBN</th>
+                  <th>Buchcode</th>
+                  <th>Preis</th>
+                  <th>Auswahl</th>
+                  <th>Betrag</th>
+                </tr>
+              </thead>
+              <tbody>
+                {lines.map((l, i) => {
+                  const amount =
+                    l.mode === 'full'
+                      ? l.meta?.price_eur ?? 0
+                      : l.mode === 'damage5'
+                        ? 5
+                        : l.mode === 'damage10'
+                          ? 10
+                          : parseNum(l.customAmount) ?? 0;
+
+                  const choice =
+                    l.mode === 'full'
+                      ? 'Ersatz (voll)'
+                      : l.mode === 'damage5'
+                        ? 'Beschädigt (5€)'
+                        : l.mode === 'damage10'
+                          ? 'Beschädigt (10€)'
+                          : 'Beschädigt (frei)';
+
+                  return (
+                    <tr key={i}>
+                      <td>{l.meta?.title_name ?? l.meta?.title_id ?? '-'}</td>
+                      <td>{l.meta?.subject ?? '-'}</td>
+                      <td>{l.meta?.isbn ?? '-'}</td>
+                      <td>{l.book_code}</td>
+                      <td>{euro(l.meta?.price_eur)}</td>
+                      <td>{choice}</td>
+                      <td>{euro(amount)}</td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+
+            <div style={{ marginTop: 14, fontSize: 12 }}>
+              Unterschrift Erziehungsberechtigte/r: ________________________________
             </div>
           </div>
-        </Modal>
-      )}
+
+          <div className="no-print" style={{ display: 'flex', gap: 10, marginTop: 12, justifyContent: 'flex-end' }}>
+            <button className="btn secondary" onClick={() => setShowPrint(false)}>
+              Schließen
+            </button>
+            <button className="btn ok" onClick={() => window.print()}>
+              Drucken
+            </button>
+          </div>
+        </div>
+      </Modal>
     </div>
   );
 }
