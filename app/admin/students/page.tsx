@@ -18,8 +18,9 @@ type StudentRow = {
 const COURSE_OPTIONS: StudentRow['course'][] = ['Bio', 'Chemie', 'Sowi', 'Informatik', 'Arbeitslehre', 'F'];
 const REL_OPTIONS: NonNullable<StudentRow['religion']>[] = ['EV', 'RK', 'PP'];
 
+type ClassRow = { class_id: string };
+
 function gradeFromClassId(classId: string): number | null {
-  // "5a" -> 5, "10b" -> 10
   const m = (classId || '').trim().match(/^(\d{1,2})/);
   if (!m) return null;
   const n = Number(m[1]);
@@ -36,7 +37,7 @@ export default function AdminStudentsPage() {
   const [classId, setClassId] = useState('');       // z.B. 5a
   const [studentId, setStudentId] = useState('');   // z.B. S0001
   const [isGu, setIsGu] = useState(false);          // Regel default
-  const [religion, setReligion] = useState<StudentRow['religion']>('EV'); // Pflicht (du kannst Standard EV setzen)
+  const [religion, setReligion] = useState<StudentRow['religion']>('EV'); // Pflicht
   const [course, setCourse] = useState<StudentRow['course']>(null);       // optional
   const [active, setActive] = useState(true);
 
@@ -53,6 +54,65 @@ export default function AdminStudentsPage() {
   const grade = useMemo(() => gradeFromClassId(classId), [classId]);
   const showCourseHint = grade !== null && grade >= 7;
 
+  // ===== NEU: Klassenliste + Umsetzen =====
+  const [classes, setClasses] = useState<ClassRow[]>([]);
+  const [moveStudentId, setMoveStudentId] = useState('');
+  const [moveToClassId, setMoveToClassId] = useState('');
+  const [moveBusy, setMoveBusy] = useState(false);
+
+  async function loadClasses() {
+    const { data, error } = await supabase
+      .from('sb_classes')
+      .select('class_id')
+      .order('class_id', { ascending: true });
+
+    if (!error && data) {
+      setClasses(data as any);
+      // Falls noch nichts ausgewählt: ersten Wert setzen
+      if (!moveToClassId && data.length > 0) setMoveToClassId((data[0] as any).class_id);
+    }
+  }
+
+  async function moveStudentToClass() {
+    setMsg(null);
+    setOk(null);
+
+    try {
+      const sid = moveStudentId.trim() || studentId.trim();
+      const newCid = moveToClassId.trim();
+
+      if (!sid) throw new Error('Schüler-Code fehlt (für Umsetzen).');
+      if (!newCid) throw new Error('Bitte Ziel-Klasse wählen.');
+
+      setMoveBusy(true);
+
+      // Admin-RPC (sauber & sicher)
+      const { error } = await supabase.rpc('sb_admin_update_student_class', {
+        p_student_id: sid,
+        p_new_class_id: newCid,
+      });
+
+      if (error) throw error;
+
+      setOk(`Schüler ${sid} wurde nach ${newCid} umgesetzt.`);
+      // Formular ebenfalls aktualisieren (wenn es derselbe Schüler ist)
+      if (studentId.trim() === sid) setClassId(newCid);
+
+      await loadStudents();
+    } catch (e: any) {
+      setMsg(e?.message ?? 'Unbekannter Fehler beim Umsetzen.');
+    } finally {
+      setMoveBusy(false);
+    }
+  }
+
+  function useSelectedForMove() {
+    // nimmt den aktuell ausgewählten Schüler (selected) oder studentId
+    const sid = (selected ?? studentId).trim();
+    if (sid) setMoveStudentId(sid);
+  }
+  // ===== /NEU =====
+
   useEffect(() => {
     (async () => {
       const { data } = await supabase.auth.getSession();
@@ -62,6 +122,7 @@ export default function AdminStudentsPage() {
 
       setReady(true);
       await loadStudents();
+      await loadClasses(); // NEU
     })();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
@@ -96,6 +157,9 @@ export default function AdminStudentsPage() {
     setBookCode('');
     setMsg(null);
     setOk(null);
+
+    // NEU: Umsetzen-Form nicht hart löschen, aber Student-Feld leeren
+    setMoveStudentId('');
   }
 
   function loadIntoForm(r: StudentRow) {
@@ -108,6 +172,10 @@ export default function AdminStudentsPage() {
     setActive(Boolean(r.active ?? true));
     setOk(null);
     setMsg(null);
+
+    // NEU: praktischer: direkt in Umsetzen-Feld übernehmen
+    setMoveStudentId(r.student_id);
+    if (r.class_id && !moveToClassId) setMoveToClassId(r.class_id);
   }
 
   async function saveStudent() {
@@ -121,10 +189,8 @@ export default function AdminStudentsPage() {
       if (!sid) throw new Error('Schüler-Code fehlt (z.B. S0001).');
       if (!cid) throw new Error('Klasse fehlt (z.B. 5a).');
 
-      // Pflicht: Religion
       if (!religion) throw new Error('Religion fehlt (EV / RK / PP).');
 
-      // Optional: Kurs – wir speichern null, wenn leer
       const courseVal = course ? course : null;
 
       const { error } = await supabase
@@ -133,7 +199,7 @@ export default function AdminStudentsPage() {
           {
             student_id: sid,
             class_id: cid,
-            is_gu: Boolean(isGu),      // Pflicht (NOT NULL)
+            is_gu: Boolean(isGu),
             religion,
             course: courseVal,
             active: Boolean(active),
@@ -151,7 +217,6 @@ export default function AdminStudentsPage() {
     }
   }
 
-  // Buch -> Schüler (Admin)
   async function assignBookToStudent() {
     setMsg(null);
     setOk(null);
@@ -178,7 +243,6 @@ export default function AdminStudentsPage() {
     }
   }
 
-  // Buch -> Lager (Admin)
   async function assignBookToStorage() {
     setMsg(null);
     setOk(null);
@@ -308,6 +372,55 @@ export default function AdminStudentsPage() {
           <button className="btn ok" onClick={assignBookToStudent}>Buch → Schüler</button>
           <button className="btn secondary" onClick={assignBookToStorage}>Buch → Lager</button>
         </div>
+
+        {/* ===== NEU: Schüler umsetzen ===== */}
+        <hr className="sep" />
+        <div className="row">
+          <div className="badge">Schüler in andere Klasse umsetzen (z.B. Wechsel / Nicht versetzt)</div>
+          <div className="spacer" />
+          <button className="btn secondary" onClick={loadClasses}>Klassen aktualisieren</button>
+        </div>
+
+        <div style={{ height: 8 }} />
+
+        <div className="row" style={{ flexWrap: 'wrap', gap: 10 }}>
+          <input
+            className="input"
+            value={moveStudentId}
+            onChange={(e) => setMoveStudentId(e.target.value)}
+            placeholder="Schüler-Code (leer = nimmt oben)"
+            style={{ maxWidth: 260 }}
+          />
+
+          <select
+            className="select"
+            value={moveToClassId}
+            onChange={(e) => setMoveToClassId(e.target.value)}
+            style={{ maxWidth: 200 }}
+          >
+            {classes.length === 0 ? (
+              <option value={moveToClassId || ''}>{moveToClassId || '(keine Klassen geladen)'}</option>
+            ) : null}
+            {classes.map((c) => (
+              <option key={c.class_id} value={c.class_id}>
+                {c.class_id}
+              </option>
+            ))}
+          </select>
+
+          <button className="btn ok" onClick={moveStudentToClass} disabled={moveBusy}>
+            {moveBusy ? 'Speichere…' : 'Klasse ändern'}
+          </button>
+
+          <button className="btn secondary" onClick={useSelectedForMove}>
+            Aus Auswahl übernehmen
+          </button>
+
+          <div className="small" style={{ opacity: 0.85 }}>
+            Tipp: „Bearbeiten“ klicken → Schüler wird automatisch ins Umsetzen-Feld übernommen.
+          </div>
+        </div>
+        {/* ===== /NEU ===== */}
 
         <hr className="sep" />
 
