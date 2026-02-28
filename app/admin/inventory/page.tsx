@@ -41,6 +41,22 @@ type StudentMiniRow = {
 };
 // ===== /Soll–Ist =====
 
+// ===== Soll–Ist pro Schüler (View sb_student_required_check) =====
+type StudentRequiredRow = {
+  student_id: string;
+  class_id: string | null;
+  subject: string | null;
+  title_id: string;
+  title_name: string | null;
+  isbn: string | null;
+  price_eur: number | null;
+  cnt_should: number | null;
+  cnt_is: number | null;
+  cnt_missing: number | null;
+  cnt_extra: number | null;
+};
+// ===== /Soll–Ist pro Schüler =====
+
 function euro(n: number | null | undefined) {
   if (n == null || Number.isNaN(n)) return '-';
   return Number(n).toFixed(2).replace('.', ',') + ' €';
@@ -62,6 +78,62 @@ export default function AdminInventoryPage() {
   const [status, setStatus] = useState<'ok' | 'active'>('ok');
   const [condition, setCondition] = useState<'ok' | 'used' | 'damaged'>('ok');
   const [putIntoStorage, setPutIntoStorage] = useState(true);
+
+  // ===== NEU: Auto-Fill Titelmeta + vorhandene Buchcodes =====
+  const [autoLoading, setAutoLoading] = useState(false);
+  const [autoErr, setAutoErr] = useState<string | null>(null);
+  const [existingCodes, setExistingCodes] = useState<string>(''); // vorhandene Codes des Titels (nur Anzeige)
+  const [autoTouched, setAutoTouched] = useState(false); // verhindert „überbügeln“, wenn du manuell editierst
+
+  async function autoFillFromTitle(p_title_id: string) {
+    const tid = (p_title_id || '').trim();
+    if (!tid) return;
+
+    setAutoErr(null);
+    setAutoLoading(true);
+    try {
+      // 1) Titel holen
+      const { data: t, error: tErr } = await supabase
+        .from('sb_titles')
+        .select('title_id, subject, title_name, isbn, price_eur')
+        .eq('title_id', tid)
+        .maybeSingle();
+
+      if (tErr) throw tErr;
+
+      if (t) {
+        // nur automatisch setzen, wenn du nicht schon bewusst geändert hast
+        if (!autoTouched) {
+          setSubject((t as any).subject ?? '');
+          setTitleName((t as any).title_name ?? '');
+          setIsbn((t as any).isbn ?? '');
+          const pr = (t as any).price_eur;
+          setPriceEur(pr != null ? String(pr).replace('.', ',') : '');
+        }
+
+        // 2) vorhandene Buchcodes für diesen Titel laden
+        const { data: b, error: bErr } = await supabase
+          .from('sb_books')
+          .select('book_code')
+          .eq('title_id', tid)
+          .order('book_code', { ascending: true })
+          .limit(5000);
+
+        if (bErr) throw bErr;
+
+        const codes = (b ?? []).map((x: any) => String(x.book_code));
+        setExistingCodes(codes.join(','));
+      } else {
+        setExistingCodes('');
+      }
+    } catch (e: any) {
+      setAutoErr(e?.message ?? 'Fehler beim Auto-Fill.');
+      setExistingCodes('');
+    } finally {
+      setAutoLoading(false);
+    }
+  }
+  // ===== /Auto-Fill =====
 
   // ===== Titel-Übersicht (Schüler/Lehrer/Lager) =====
   const [sumLoading, setSumLoading] = useState(false);
@@ -189,7 +261,6 @@ export default function AdminInventoryPage() {
   }
 
   async function findFirstMissingStudentId(p_class_id: string, p_title_id: string): Promise<string> {
-    // 1) alle Schüler der Klasse holen
     const { data: studs, error: e1 } = await supabase
       .from('sb_students')
       .select('student_id,class_id,is_gu,religion,course,active')
@@ -200,8 +271,6 @@ export default function AdminInventoryPage() {
     const students = (studs ?? []) as StudentMiniRow[];
     if (students.length === 0) throw new Error(`Keine Schüler in Klasse ${p_class_id} gefunden.`);
 
-    // 2) Für jeden Schüler prüfen, ob er das title_id bereits hat
-    //    -> sb_books muss vorhanden sein und Felder: holder_type, holder_id, title_id
     for (const s of students) {
       const { data: books, error: e2 } = await supabase
         .from('sb_books')
@@ -230,14 +299,11 @@ export default function AdminInventoryPage() {
       const code = assignBookCode.trim();
       if (!code) throw new Error('Bitte Buchcode eingeben.');
 
-      // Ziel-Schüler bestimmen
       let sid = assignStudentId.trim();
       if (!sid) {
         sid = await findFirstMissingStudentId(cid, assignTitle.title_id);
       }
 
-      // ✅ Zuweisen (Admin)
-      // Wenn deine RPC anders heißt, ändere NUR diese Zeile:
       const { error } = await supabase.rpc('sb_scan_book_admin', {
         p_scan: code,
         p_new_holder_type: 'student',
@@ -250,14 +316,99 @@ export default function AdminInventoryPage() {
       setAssignOk(`Buch ${code} → Schüler ${sid} (Klasse ${cid})`);
       setAssignBookCode('');
 
-      // Abgleich + Summary aktualisieren
       await loadClassCheck();
       await loadSummary();
+
+      // falls wir aus dem Schülerblock heraus zugewiesen haben, den ebenfalls aktualisieren
+      if (checkStudentId.trim()) {
+        await loadStudentCheck();
+      }
     } catch (e: any) {
       setAssignMsg(e?.message ?? 'Unbekannter Fehler beim Zuweisen.');
     } finally {
       setAssignBusy(false);
     }
+  }
+  // ===== /NEU =====
+
+  // ===== NEU: Soll–Ist pro Schüler (View sb_student_required_check) =====
+  const [checkStudentId, setCheckStudentId] = useState('S0001');
+  const [studentClassId, setStudentClassId] = useState<string>('');
+  const [studentRows, setStudentRows] = useState<StudentRequiredRow[]>([]);
+  const [studentLoading, setStudentLoading] = useState(false);
+  const [studentErr, setStudentErr] = useState<string | null>(null);
+  const [studentQuery, setStudentQuery] = useState('');
+
+  const filteredStudentRows = useMemo(() => {
+    const q = studentQuery.trim().toLowerCase();
+    if (!q) return studentRows;
+    return studentRows.filter((r) => {
+      const hay = [r.title_id, r.title_name ?? '', r.subject ?? '', r.isbn ?? ''].join(' ').toLowerCase();
+      return hay.includes(q);
+    });
+  }, [studentRows, studentQuery]);
+
+  const studentTotals = useMemo(() => {
+    let should = 0, isv = 0, miss = 0, extra = 0;
+    for (const r of filteredStudentRows) {
+      should += Number(r.cnt_should ?? 0);
+      isv += Number(r.cnt_is ?? 0);
+      miss += Number(r.cnt_missing ?? 0);
+      extra += Number(r.cnt_extra ?? 0);
+    }
+    return { should, isv, miss, extra };
+  }, [filteredStudentRows]);
+
+  async function loadStudentCheck() {
+    setStudentErr(null);
+    setStudentLoading(true);
+    try {
+      const sid = checkStudentId.trim();
+      if (!sid) throw new Error('Bitte Schülercode eingeben (z.B. S0001).');
+
+      // Klasse des Schülers holen (für Anzeige + Notiz)
+      const { data: sData, error: sErr } = await supabase
+        .from('sb_students')
+        .select('student_id,class_id')
+        .eq('student_id', sid)
+        .maybeSingle();
+
+      if (sErr) throw sErr;
+      const cid = (sData as any)?.class_id ?? '';
+      setStudentClassId(cid);
+
+      const { data, error } = await supabase
+        .from('sb_student_required_check')
+        .select('student_id,class_id,subject,title_id,title_name,isbn,price_eur,cnt_should,cnt_is,cnt_missing,cnt_extra')
+        .eq('student_id', sid)
+        .order('subject', { ascending: true })
+        .order('title_name', { ascending: true });
+
+      if (error) throw error;
+      setStudentRows((data ?? []) as any);
+    } catch (e: any) {
+      setStudentErr(e?.message ?? 'Fehler beim Laden (Schüler-Abgleich).');
+      setStudentRows([]);
+      setStudentClassId('');
+    } finally {
+      setStudentLoading(false);
+    }
+  }
+
+  function openAssignForStudent(r: StudentRequiredRow) {
+    // Klasse für Notizen setzen (wenn vorhanden)
+    if (r.class_id) setCheckClassId(r.class_id);
+    else if (studentClassId) setCheckClassId(studentClassId);
+
+    setAssignOpen(true);
+    setAssignTitle({ title_id: r.title_id, title_name: r.title_name, subject: r.subject });
+
+    // Schüler ist fest -> kein Auto-Suche nötig
+    setAssignStudentId(r.student_id);
+
+    setAssignBookCode('');
+    setAssignMsg(null);
+    setAssignOk(null);
   }
   // ===== /NEU =====
 
@@ -270,6 +421,8 @@ export default function AdminInventoryPage() {
       setReady(true);
 
       loadSummary();
+      // optional: beim Laden einmal Titelmeta ziehen für Startwert
+      autoFillFromTitle(titleId);
     })();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
@@ -303,6 +456,8 @@ export default function AdminInventoryPage() {
       setOk('Erfolgreich gespeichert.');
 
       loadSummary();
+      // nach speichern: titel-codes neu laden
+      autoFillFromTitle(titleId);
     } catch (e: any) {
       setMsg(e?.message ?? 'Unbekannter Fehler');
     }
@@ -335,22 +490,115 @@ export default function AdminInventoryPage() {
         <div style={{ height: 12 }} />
 
         <div className="row">
-          <input className="input" value={titleId} onChange={(e) => setTitleId(e.target.value)} placeholder="p_title_id" />
-          <input className="input" value={subject} onChange={(e) => setSubject(e.target.value)} placeholder="p_subject" />
+          <input
+            className="input"
+            value={titleId}
+            onChange={(e) => {
+              setTitleId(e.target.value);
+              setAutoErr(null);
+            }}
+            onBlur={() => autoFillFromTitle(titleId)}
+            placeholder="p_title_id"
+          />
+          <input
+            className="input"
+            value={subject}
+            onChange={(e) => {
+              setSubject(e.target.value);
+              setAutoTouched(true);
+            }}
+            placeholder="p_subject"
+          />
         </div>
 
         <div style={{ height: 10 }} />
 
         <div className="row">
-          <input className="input" value={titleName} onChange={(e) => setTitleName(e.target.value)} placeholder="p_title_name" />
-          <input className="input" value={isbn} onChange={(e) => setIsbn(e.target.value)} placeholder="p_isbn (optional)" />
+          <input
+            className="input"
+            value={titleName}
+            onChange={(e) => {
+              setTitleName(e.target.value);
+              setAutoTouched(true);
+            }}
+            placeholder="p_title_name"
+          />
+          <input
+            className="input"
+            value={isbn}
+            onChange={(e) => {
+              setIsbn(e.target.value);
+              setAutoTouched(true);
+            }}
+            placeholder="p_isbn (optional)"
+          />
         </div>
 
         <div style={{ height: 10 }} />
 
         <div className="row">
-          <input className="input" value={priceEur} onChange={(e) => setPriceEur(e.target.value)} placeholder="p_price_eur" />
+          <input
+            className="input"
+            value={priceEur}
+            onChange={(e) => {
+              setPriceEur(e.target.value);
+              setAutoTouched(true);
+            }}
+            placeholder="p_price_eur"
+          />
+
+          <button
+            className="btn secondary"
+            onClick={() => {
+              setAutoTouched(false); // damit wieder automatisch setzen darf
+              autoFillFromTitle(titleId);
+            }}
+            disabled={autoLoading}
+          >
+            {autoLoading ? 'Lade…' : 'ISBN/Preis/Fach automatisch ziehen'}
+          </button>
         </div>
+
+        {autoErr ? (
+          <div className="small" style={{ marginTop: 8, color: 'rgba(255,93,108,.95)', whiteSpace: 'pre-wrap' }}>
+            {autoErr}
+          </div>
+        ) : null}
+
+        {existingCodes ? (
+          <div className="small" style={{ marginTop: 8, opacity: 0.85, lineHeight: 1.6 }}>
+            <b>Vorhandene Buchcodes für {titleId.trim()}:</b>
+            <div style={{ marginTop: 6 }}>
+              <span className="kbd" style={{ display: 'inline-block', maxWidth: '100%', overflowX: 'auto' }}>
+                {existingCodes}
+              </span>
+            </div>
+            <div style={{ marginTop: 6, display: 'flex', gap: 10, flexWrap: 'wrap' }}>
+              <button
+                className="btn secondary"
+                onClick={() => setBookCodes(existingCodes)}
+                disabled={autoLoading}
+              >
+                Vorhandene Codes in Eingabefeld übernehmen (ersetzen)
+              </button>
+              <button
+                className="btn secondary"
+                onClick={() => setBookCodes((prev) => {
+                  const p = (prev || '').trim();
+                  if (!p) return existingCodes;
+                  return p + ',' + existingCodes;
+                })}
+                disabled={autoLoading}
+              >
+                Vorhandene Codes an Eingabefeld anhängen
+              </button>
+            </div>
+          </div>
+        ) : (
+          <div className="small" style={{ marginTop: 8, opacity: 0.7 }}>
+            (Keine vorhandenen Codes geladen – entweder Titel noch nicht vorhanden oder noch keine Exemplare.)
+          </div>
+        )}
 
         <div style={{ height: 10 }} />
 
@@ -624,7 +872,7 @@ export default function AdminInventoryPage() {
           </div>
         )}
 
-        {/* ===== NEU: Zuweisungsfeld (Buchcode → Schüler) ===== */}
+        {/* ===== Zuweisungsfeld (Buchcode → Schüler) ===== */}
         {assignOpen && assignTitle ? (
           <>
             <hr className="sep" />
@@ -671,13 +919,151 @@ export default function AdminInventoryPage() {
             </div>
           </>
         ) : null}
-        {/* ===== /NEU ===== */}
+        {/* ===== /Zuweisungsfeld ===== */}
 
         <div style={{ height: 6 }} />
         <div className="small" style={{ opacity: 0.75 }}>
           Quelle: View <b>sb_class_required_check</b>
         </div>
       </div>
+
+      {/* ===== NEU: Soll–Ist Abgleich pro Schüler ===== */}
+      <div className="card" style={{ marginTop: 14 }}>
+        <div className="row">
+          <div className="badge">Soll–Ist Abgleich pro Schüler (Schülercode)</div>
+          <div className="spacer" />
+          <button className="btn secondary" onClick={loadStudentCheck} disabled={studentLoading}>
+            {studentLoading ? 'Lade…' : 'Aktualisieren'}
+          </button>
+        </div>
+
+        <div style={{ height: 10 }} />
+
+        <div className="row" style={{ flexWrap: 'wrap', gap: 10 }}>
+          <input
+            className="input"
+            value={checkStudentId}
+            onChange={(e) => setCheckStudentId(e.target.value)}
+            placeholder="Schülercode (z.B. S0001)"
+            style={{ maxWidth: 200 }}
+          />
+          <button className="btn ok" onClick={loadStudentCheck} disabled={studentLoading}>
+            Abgleich laden
+          </button>
+
+          <div className="badge">Klasse: <b>{studentClassId || '-'}</b></div>
+
+          <input
+            className="input"
+            value={studentQuery}
+            onChange={(e) => setStudentQuery(e.target.value)}
+            placeholder="Suchen nach Fach / Titel / ISBN / title_id…"
+            style={{ maxWidth: 420 }}
+          />
+
+          <div className="spacer" />
+          <div className="badge">Titel: {filteredStudentRows.length}</div>
+          <div className="badge">Soll: {studentTotals.should}</div>
+          <div className="badge">Ist: {studentTotals.isv}</div>
+          <div className="badge" style={{ borderColor: 'rgba(255,93,108,.6)' }}>Fehlt: {studentTotals.miss}</div>
+          <div className="badge" style={{ borderColor: 'rgba(255,188,66,.6)' }}>Zu viel: {studentTotals.extra}</div>
+        </div>
+
+        {studentErr ? (
+          <>
+            <hr className="sep" />
+            <div className="small" style={{ color: 'rgba(255,93,108,.95)', whiteSpace: 'pre-wrap' }}>
+              {studentErr}
+              {'\n\n'}
+              Hinweis: Prüfe, ob die View <b>sb_student_required_check</b> existiert und lesbar ist.
+            </div>
+          </>
+        ) : null}
+
+        <hr className="sep" />
+
+        {filteredStudentRows.length === 0 ? (
+          <div className="small" style={{ opacity: 0.85 }}>
+            Keine Daten (oder Filter zu eng). Tipp: Schülercode eingeben und „Abgleich laden“.
+          </div>
+        ) : (
+          <div style={{ overflowX: 'auto' }}>
+            <table className="table" style={{ width: '100%', borderCollapse: 'collapse' }}>
+              <thead>
+                <tr>
+                  <th style={{ textAlign: 'left', padding: 8 }}>Fach</th>
+                  <th style={{ textAlign: 'left', padding: 8 }}>Titel</th>
+                  <th style={{ textAlign: 'left', padding: 8 }}>ISBN</th>
+                  <th style={{ textAlign: 'left', padding: 8 }}>Preis</th>
+                  <th style={{ textAlign: 'right', padding: 8 }}>Soll</th>
+                  <th style={{ textAlign: 'right', padding: 8 }}>Ist</th>
+                  <th style={{ textAlign: 'right', padding: 8 }}>Fehlt</th>
+                  <th style={{ textAlign: 'right', padding: 8 }}>Zu viel</th>
+                  <th style={{ textAlign: 'left', padding: 8 }}>Aktion</th>
+                </tr>
+              </thead>
+              <tbody>
+                {filteredStudentRows.map((r, idx) => {
+                  const missing = Number(r.cnt_missing ?? 0);
+                  const extra = Number(r.cnt_extra ?? 0);
+                  const okRow = missing === 0 && extra === 0;
+
+                  return (
+                    <tr key={`${r.student_id}_${r.title_id}_${idx}`} style={{ borderTop: '1px solid rgba(255,255,255,0.10)' }}>
+                      <td style={{ padding: 8, opacity: 0.9 }}>{r.subject ?? '-'}</td>
+                      <td style={{ padding: 8 }}>
+                        <div style={{ fontWeight: 800 }}>{r.title_name ?? r.title_id}</div>
+                        <div className="small" style={{ opacity: 0.75 }}>{r.title_id}</div>
+                      </td>
+                      <td style={{ padding: 8, opacity: 0.9 }}>{r.isbn ?? '-'}</td>
+                      <td style={{ padding: 8, opacity: 0.9 }}>{euro(r.price_eur)}</td>
+                      <td style={{ padding: 8, textAlign: 'right' }}>{Number(r.cnt_should ?? 0)}</td>
+                      <td style={{ padding: 8, textAlign: 'right' }}>{Number(r.cnt_is ?? 0)}</td>
+                      <td
+                        style={{
+                          padding: 8,
+                          textAlign: 'right',
+                          fontWeight: 800,
+                          color: missing > 0 ? 'rgba(255,93,108,.95)' : 'rgba(255,255,255,0.85)',
+                        }}
+                      >
+                        {missing}
+                      </td>
+                      <td
+                        style={{
+                          padding: 8,
+                          textAlign: 'right',
+                          fontWeight: 800,
+                          color: extra > 0 ? 'rgba(255,188,66,.95)' : 'rgba(255,255,255,0.85)',
+                        }}
+                      >
+                        {extra}
+                      </td>
+                      <td style={{ padding: 8 }}>
+                        {okRow ? (
+                          <span className="badge">OK</span>
+                        ) : missing > 0 ? (
+                          <button className="btn ok" style={{ padding: '6px 10px' }} onClick={() => openAssignForStudent(r)}>
+                            Jetzt zuweisen
+                          </button>
+                        ) : (
+                          <span className="badge">Prüfen</span>
+                        )}
+                      </td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          </div>
+        )}
+
+        <div style={{ height: 6 }} />
+        <div className="small" style={{ opacity: 0.75 }}>
+          Quelle: View <b>sb_student_required_check</b>
+        </div>
+      </div>
+      {/* ===== /NEU ===== */}
     </div>
   );
 }
