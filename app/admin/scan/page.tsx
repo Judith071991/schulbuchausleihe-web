@@ -1,9 +1,9 @@
 'use client';
 
 import { useEffect, useRef, useState } from 'react';
-import Topbar from '../../components/Topbar';
-import { supabase } from '../../lib/supabaseClient';
-import { fetchRole } from '../../lib/role';
+import Topbar from '../../../components/Topbar';
+import { supabase } from '../../../lib/supabaseClient';
+import { fetchRole } from '../../../lib/role';
 
 export default function AdminScanPage() {
   const [ready, setReady] = useState(false);
