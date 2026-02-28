@@ -27,6 +27,15 @@ function gradeFromClassId(classId: string): number | null {
   return Number.isFinite(n) ? n : null;
 }
 
+// ===== NEU: Helfer für Mehrfach-Codes =====
+function splitCodes(raw: string): string[] {
+  return (raw || '')
+    .split(',')
+    .map((s) => s.trim())
+    .filter(Boolean);
+}
+// ===== /NEU =====
+
 export default function AdminStudentsPage() {
   const [ready, setReady] = useState(false);
 
@@ -41,8 +50,12 @@ export default function AdminStudentsPage() {
   const [course, setCourse] = useState<StudentRow['course']>(null);       // optional
   const [active, setActive] = useState(true);
 
-  // Scannen
+  // Scannen (kann jetzt auch mehrere enthalten: 123,456,789)
   const [bookCode, setBookCode] = useState('');
+
+  // ===== NEU: Statusanzeige bei Mehrfach-Zuweisung =====
+  const [scanBusy, setScanBusy] = useState(false);
+  // ===== /NEU =====
 
   // Liste
   const [rows, setRows] = useState<StudentRow[]>([]);
@@ -68,7 +81,6 @@ export default function AdminStudentsPage() {
 
     if (!error && data) {
       setClasses(data as any);
-      // Falls noch nichts ausgewählt: ersten Wert setzen
       if (!moveToClassId && data.length > 0) setMoveToClassId((data[0] as any).class_id);
     }
   }
@@ -86,7 +98,6 @@ export default function AdminStudentsPage() {
 
       setMoveBusy(true);
 
-      // Admin-RPC (sauber & sicher)
       const { error } = await supabase.rpc('sb_admin_update_student_class', {
         p_student_id: sid,
         p_new_class_id: newCid,
@@ -95,7 +106,6 @@ export default function AdminStudentsPage() {
       if (error) throw error;
 
       setOk(`Schüler ${sid} wurde nach ${newCid} umgesetzt.`);
-      // Formular ebenfalls aktualisieren (wenn es derselbe Schüler ist)
       if (studentId.trim() === sid) setClassId(newCid);
 
       await loadStudents();
@@ -107,7 +117,6 @@ export default function AdminStudentsPage() {
   }
 
   function useSelectedForMove() {
-    // nimmt den aktuell ausgewählten Schüler (selected) oder studentId
     const sid = (selected ?? studentId).trim();
     if (sid) setMoveStudentId(sid);
   }
@@ -158,7 +167,6 @@ export default function AdminStudentsPage() {
     setMsg(null);
     setOk(null);
 
-    // NEU: Umsetzen-Form nicht hart löschen, aber Student-Feld leeren
     setMoveStudentId('');
   }
 
@@ -173,7 +181,6 @@ export default function AdminStudentsPage() {
     setOk(null);
     setMsg(null);
 
-    // NEU: praktischer: direkt in Umsetzen-Feld übernehmen
     setMoveStudentId(r.student_id);
     if (r.class_id && !moveToClassId) setMoveToClassId(r.class_id);
   }
@@ -217,55 +224,110 @@ export default function AdminStudentsPage() {
     }
   }
 
+  // ===== NEU: Mehrfach-Scan -> Schüler =====
   async function assignBookToStudent() {
     setMsg(null);
     setOk(null);
 
     try {
       const sid = studentId.trim();
-      const code = bookCode.trim();
+      const raw = bookCode.trim();
       if (!sid) throw new Error('Schüler-Code fehlt (oben).');
-      if (!code) throw new Error('Buch-Code fehlt.');
+      if (!raw) throw new Error('Buch-Code fehlt.');
 
-      const { error } = await supabase.rpc('sb_scan_book_admin', {
-        p_scan: code,
-        p_new_holder_type: 'student',
-        p_new_holder_id: sid,
-        p_note: null,
-      });
+      const codes = splitCodes(raw);
+      if (codes.length === 0) throw new Error('Keine gültigen Buchcodes gefunden.');
 
-      if (error) throw error;
+      setScanBusy(true);
 
-      setOk(`Buch ${code} → Schüler ${sid}`);
-      setBookCode('');
+      const okList: string[] = [];
+      const errList: string[] = [];
+
+      for (const code of codes) {
+        const { error } = await supabase.rpc('sb_scan_book_admin', {
+          p_scan: code,
+          p_new_holder_type: 'student',
+          p_new_holder_id: sid,
+          p_note: null,
+        });
+
+        if (error) {
+          errList.push(`${code}: ${error.message}`);
+        } else {
+          okList.push(code);
+        }
+      }
+
+      const parts: string[] = [];
+      if (okList.length) parts.push(`✅ Zugewiesen an ${sid}: ${okList.join(', ')}`);
+      if (errList.length) parts.push(`❌ Fehler:\n- ${errList.join('\n- ')}`);
+
+      if (errList.length && !okList.length) {
+        setMsg(parts.join('\n\n'));
+      } else {
+        setOk(parts.join('\n\n'));
+      }
+
+      // nur leeren, wenn alles ok war (sonst lässt du es stehen zum Korrigieren)
+      if (errList.length === 0) setBookCode('');
     } catch (e: any) {
       setMsg(e?.message ?? 'Unbekannter Fehler beim Zuweisen.');
+    } finally {
+      setScanBusy(false);
     }
   }
+  // ===== /NEU =====
 
+  // ===== NEU: Mehrfach-Scan -> Lager =====
   async function assignBookToStorage() {
     setMsg(null);
     setOk(null);
 
     try {
-      const code = bookCode.trim();
-      if (!code) throw new Error('Buch-Code fehlt.');
+      const raw = bookCode.trim();
+      if (!raw) throw new Error('Buch-Code fehlt.');
 
-      const { error } = await supabase.rpc('sb_scan_book_admin', {
-        p_scan: code,
-        p_new_holder_type: 'storage',
-        p_new_holder_id: 'storage',
-        p_note: null,
-      });
+      const codes = splitCodes(raw);
+      if (codes.length === 0) throw new Error('Keine gültigen Buchcodes gefunden.');
 
-      if (error) throw error;
+      setScanBusy(true);
 
-      setOk(`Buch ${code} → Lager`);
-      setBookCode('');
+      const okList: string[] = [];
+      const errList: string[] = [];
+
+      for (const code of codes) {
+        const { error } = await supabase.rpc('sb_scan_book_admin', {
+          p_scan: code,
+          p_new_holder_type: 'storage',
+          p_new_holder_id: 'storage',
+          p_note: null,
+        });
+
+        if (error) {
+          errList.push(`${code}: ${error.message}`);
+        } else {
+          okList.push(code);
+        }
+      }
+
+      const parts: string[] = [];
+      if (okList.length) parts.push(`✅ Ins Lager gebucht: ${okList.join(', ')}`);
+      if (errList.length) parts.push(`❌ Fehler:\n- ${errList.join('\n- ')}`);
+
+      if (errList.length && !okList.length) {
+        setMsg(parts.join('\n\n'));
+      } else {
+        setOk(parts.join('\n\n'));
+      }
+
+      if (errList.length === 0) setBookCode('');
     } catch (e: any) {
       setMsg(e?.message ?? 'Unbekannter Fehler beim Einlagern.');
+    } finally {
+      setScanBusy(false);
     }
   }
+  // ===== /NEU =====
 
   const filtered = useMemo(() => {
     const cid = classId.trim().toLowerCase();
@@ -326,7 +388,7 @@ export default function AdminStudentsPage() {
           >
             <option value="">Kurs: keiner</option>
             {COURSE_OPTIONS.map((c) => (
-              <option key={c!} value={c!}>{c}</option>
+              <option key={c!} value={c!}>{c!}</option>
             ))}
           </select>
 
@@ -359,18 +421,31 @@ export default function AdminStudentsPage() {
         {ok && (
           <>
             <hr className="sep" />
-            <div className="small" style={{ color: 'rgba(46,229,157,.95)', fontWeight: 800 }}>{ok}</div>
+            <div className="small" style={{ color: 'rgba(46,229,157,.95)', fontWeight: 800, whiteSpace: 'pre-wrap' }}>{ok}</div>
           </>
         )}
 
         <hr className="sep" />
 
         <div className="badge">Buch scannen (optional)</div>
+        <div className="small" style={{ marginTop: 6, opacity: 0.8 }}>
+          Tipp: Du kannst jetzt mehrere Codes eingeben: <b>123,456,789</b>
+        </div>
         <div style={{ height: 8 }} />
-        <div className="row">
-          <input className="input" value={bookCode} onChange={(e) => setBookCode(e.target.value)} placeholder="Buch-Code scannen" />
-          <button className="btn ok" onClick={assignBookToStudent}>Buch → Schüler</button>
-          <button className="btn secondary" onClick={assignBookToStorage}>Buch → Lager</button>
+        <div className="row" style={{ flexWrap: 'wrap', gap: 10 }}>
+          <input
+            className="input"
+            value={bookCode}
+            onChange={(e) => setBookCode(e.target.value)}
+            placeholder="Buch-Code scannen (oder mehrere mit Komma)"
+            style={{ maxWidth: 520 }}
+          />
+          <button className="btn ok" onClick={assignBookToStudent} disabled={scanBusy}>
+            {scanBusy ? 'Arbeite…' : 'Buch → Schüler'}
+          </button>
+          <button className="btn secondary" onClick={assignBookToStorage} disabled={scanBusy}>
+            {scanBusy ? 'Arbeite…' : 'Buch → Lager'}
+          </button>
         </div>
 
         {/* ===== NEU: Schüler umsetzen ===== */}
