@@ -8,8 +8,8 @@ import { fetchRole } from '../../../lib/role';
 export default function AdminDashboardPage() {
   const [ready, setReady] = useState(false);
 
-  useEffect(() => {
-      async function previewPromote() {
+  // ✅ 1) HIER: Funktionen gehören in die Component, NICHT in useEffect
+  async function previewPromote() {
     const { data, error } = await supabase.rpc('sb_admin_promote_classes', { p_dry_run: true });
     if (error) return alert(error.message);
 
@@ -29,11 +29,13 @@ export default function AdminDashboardPage() {
 
     alert(
       'Fertig.\n' +
-      ((data ?? []).map((r: any) => `${r.old_class_id} → ${r.new_class_id}`).join('\n') || '')
+        ((data ?? []).map((r: any) => `${r.old_class_id} → ${r.new_class_id}`).join('\n') || '')
     );
 
     window.location.reload();
   }
+
+  useEffect(() => {
     (async () => {
       const { data } = await supabase.auth.getSession();
       if (!data.session) return (window.location.href = '/login');
@@ -68,9 +70,11 @@ export default function AdminDashboardPage() {
           <button className="btn" onClick={() => (window.location.href = '/admin/inventory')}>
             Bestand / Titel & Bücher
           </button>
-         <button className="btn ok" onClick={() => (window.location.href = '/admin/required')}>
-  Soll-Listen
-</button>
+
+          <button className="btn ok" onClick={() => (window.location.href = '/admin/required')}>
+            Soll-Listen
+          </button>
+
           <button className="btn" onClick={() => (window.location.href = '/admin/students')}>
             Schüler
           </button>
@@ -80,13 +84,15 @@ export default function AdminDashboardPage() {
           <button className="btn" onClick={() => (window.location.href = '/admin/incidents')}>
             Verlust / Kaputt
           </button>
-          <button className="btn secondary" onClick={previewPromote}>
-  Schuljahreswechsel: Vorschau
-</button>
 
-<button className="btn ok" onClick={doPromote}>
-  Schuljahreswechsel: HOCHSETZEN
-</button>
+          {/* ✅ 2) Buttons bleiben, funktionieren jetzt */}
+          <button className="btn secondary" onClick={previewPromote}>
+            Schuljahreswechsel: Vorschau
+          </button>
+
+          <button className="btn ok" onClick={doPromote}>
+            Schuljahreswechsel: HOCHSETZEN
+          </button>
 
           <div className="spacer" />
           <button className="btn secondary" onClick={() => (window.location.href = '/teacher')}>
