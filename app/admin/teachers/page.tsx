@@ -22,6 +22,11 @@ export default function AdminTeachersPage() {
   const [teachers, setTeachers] = useState<TeacherRow[]>([]);
   const [loading, setLoading] = useState(false);
 
+  // ===== NEU: Buch-Scan für Zuweisung =====
+  const [bookScan, setBookScan] = useState('');
+  const [scanBusy, setScanBusy] = useState(false);
+  // ===== /NEU =====
+
   useEffect(() => {
     (async () => {
       const { data } = await supabase.auth.getSession();
@@ -33,6 +38,7 @@ export default function AdminTeachersPage() {
       setReady(true);
       loadTeachers();
     })();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   async function loadTeachers() {
@@ -64,10 +70,7 @@ export default function AdminTeachersPage() {
 
       const { error } = await supabase
         .from('sb_teachers')
-        .upsert(
-          { teacher_id: id, active },
-          { onConflict: 'teacher_id' }
-        );
+        .upsert({ teacher_id: id, active }, { onConflict: 'teacher_id' });
 
       if (error) throw error;
 
@@ -98,6 +101,58 @@ export default function AdminTeachersPage() {
     loadTeachers();
   }
 
+  // ===== NEU: Buch -> Lehrkraft =====
+  async function assignBookToTeacher() {
+    setMsg(null);
+    setOk(null);
+
+    try {
+      const tid = teacherId.trim();
+      const code = bookScan.trim();
+      if (!tid) throw new Error('Bitte zuerst teacher_id setzen (oben) oder aus Liste wählen.');
+      if (!code) throw new Error('Bitte Buchcode scannen/eingeben.');
+
+      setScanBusy(true);
+      const { error } = await supabase.rpc('sb_admin_assign_book_to_teacher', {
+        p_book_code: code,
+        p_teacher_id: tid,
+      });
+      if (error) throw error;
+
+      setOk(`Buch ${code} → Lehrkraft ${tid} zugewiesen.`);
+      setBookScan('');
+    } catch (e: any) {
+      setMsg(e?.message ?? 'Unbekannter Fehler');
+    } finally {
+      setScanBusy(false);
+    }
+  }
+
+  // ===== NEU: Buch -> Lager =====
+  async function returnBookToStorage() {
+    setMsg(null);
+    setOk(null);
+
+    try {
+      const code = bookScan.trim();
+      if (!code) throw new Error('Bitte Buchcode scannen/eingeben.');
+
+      setScanBusy(true);
+      const { error } = await supabase.rpc('sb_admin_return_book_to_storage', {
+        p_book_code: code,
+      });
+      if (error) throw error;
+
+      setOk(`Buch ${code} → Lager.`);
+      setBookScan('');
+    } catch (e: any) {
+      setMsg(e?.message ?? 'Unbekannter Fehler');
+    } finally {
+      setScanBusy(false);
+    }
+  }
+  // ===== /NEU =====
+
   if (!ready) {
     return (
       <div className="container">
@@ -117,10 +172,7 @@ export default function AdminTeachersPage() {
         <div className="row">
           <div className="badge">Lehrkraft anlegen / bearbeiten</div>
           <div className="spacer" />
-          <button
-            className="btn secondary"
-            onClick={() => (window.location.href = '/admin/dashboard')}
-          >
+          <button className="btn secondary" onClick={() => (window.location.href = '/admin/dashboard')}>
             ← Dashboard
           </button>
         </div>
@@ -152,11 +204,7 @@ export default function AdminTeachersPage() {
 
           <div className="spacer" />
 
-          <button
-            className="btn secondary"
-            onClick={loadTeachers}
-            disabled={loading}
-          >
+          <button className="btn secondary" onClick={loadTeachers} disabled={loading}>
             {loading ? 'Lade…' : 'Aktualisieren'}
           </button>
         </div>
@@ -164,10 +212,7 @@ export default function AdminTeachersPage() {
         {msg && (
           <>
             <hr className="sep" />
-            <div
-              className="small"
-              style={{ color: 'rgba(255,93,108,.95)' }}
-            >
+            <div className="small" style={{ color: 'rgba(255,93,108,.95)', whiteSpace: 'pre-wrap' }}>
               {msg}
             </div>
           </>
@@ -176,13 +221,7 @@ export default function AdminTeachersPage() {
         {ok && (
           <>
             <hr className="sep" />
-            <div
-              className="small"
-              style={{
-                color: 'rgba(46,229,157,.95)',
-                fontWeight: 800,
-              }}
-            >
+            <div className="small" style={{ color: 'rgba(46,229,157,.95)', fontWeight: 800, whiteSpace: 'pre-wrap' }}>
               {ok}
             </div>
           </>
@@ -190,9 +229,7 @@ export default function AdminTeachersPage() {
 
         <hr className="sep" />
 
-        <div className="badge">
-          Angelegte Lehrkräfte ({teachers.length})
-        </div>
+        <div className="badge">Angelegte Lehrkräfte ({teachers.length})</div>
 
         <div style={{ height: 10 }} />
 
@@ -211,14 +248,15 @@ export default function AdminTeachersPage() {
                 }}
               >
                 <div className="kbd">{t.teacher_id}</div>
-                <div style={{ marginLeft: 10 }}>
-                  {t.active ? 'aktiv' : 'inaktiv'}
-                </div>
+                <div style={{ marginLeft: 10 }}>{t.active ? 'aktiv' : 'inaktiv'}</div>
+
                 <div className="spacer" />
-                <button
-                  className="btn secondary"
-                  onClick={() => toggleTeacher(t)}
-                >
+
+                <button className="btn secondary" onClick={() => setTeacherId(t.teacher_id)}>
+                  Als aktiv wählen
+                </button>
+
+                <button className="btn secondary" onClick={() => toggleTeacher(t)}>
                   {t.active ? 'Deaktivieren' : 'Aktivieren'}
                 </button>
               </div>
@@ -226,6 +264,45 @@ export default function AdminTeachersPage() {
           </div>
         )}
       </div>
+
+      {/* ===== NEU: Scan / Zuweisen ===== */}
+      <div className="card" style={{ marginTop: 14 }}>
+        <div className="row">
+          <div className="badge">Bücher zuweisen</div>
+          <div className="spacer" />
+          <div className="badge">
+            Aktive Lehrkraft: <b>{teacherId.trim() || '—'}</b>
+          </div>
+        </div>
+
+        <div style={{ height: 12 }} />
+
+        <div className="row" style={{ flexWrap: 'wrap', gap: 10 }}>
+          <input
+            className="input"
+            value={bookScan}
+            onChange={(e) => setBookScan(e.target.value)}
+            placeholder="Buchcode scannen/eingeben"
+            style={{ maxWidth: 320 }}
+            onKeyDown={(e) => {
+              if (e.key === 'Enter') assignBookToTeacher();
+            }}
+          />
+
+          <button className="btn ok" onClick={assignBookToTeacher} disabled={scanBusy}>
+            Buch → Lehrkraft
+          </button>
+
+          <button className="btn secondary" onClick={returnBookToStorage} disabled={scanBusy}>
+            Buch → Lager
+          </button>
+
+          <div className="small" style={{ opacity: 0.85 }}>
+            Tipp: erst Lehrkraft wählen/setzen, dann Buchcodes scannen (Enter weist direkt zu).
+          </div>
+        </div>
+      </div>
+      {/* ===== /NEU ===== */}
     </div>
   );
 }
