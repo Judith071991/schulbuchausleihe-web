@@ -1,228 +1,236 @@
 'use client';
 
 import { useEffect, useMemo, useState } from 'react';
-import Topbar from '../../../components/Topbar';
-import Modal from '../../../components/Modal';
+import Topbar from '../../components/Topbar';
 import { supabase } from '../../../lib/supabaseClient';
 import { fetchRole } from '../../../lib/role';
 
-type StudentRow = { student_id: string; class: string | null };
+type StudentRow = {
+  student_id: string;
+  class_id: string | null;
+  active: boolean | null;
+  created_at: string | null;
+};
 
 export default function AdminStudentsPage() {
   const [ready, setReady] = useState(false);
+
+  const [classId, setClassId] = useState('');     // z.B. 5a
+  const [studentId, setStudentId] = useState(''); // z.B. S0001
+
+  const [bookCode, setBookCode] = useState('');
   const [msg, setMsg] = useState<string | null>(null);
   const [ok, setOk] = useState<string | null>(null);
 
-  // Schüler-Input (KEIN Name, nur Klasse + Code)
-  const [studentId, setStudentId] = useState('');
-  const [studentClass, setStudentClass] = useState('');
-
-  // Buch-Scan
-  const [scan, setScan] = useState('');
-
-  // Listen
-  const [students, setStudents] = useState<StudentRow[]>([]);
-  const filtered = useMemo(() => {
-    const q = studentId.trim();
-    if (!q) return students;
-    return students.filter(s => s.student_id.toLowerCase().includes(q.toLowerCase()));
-  }, [students, studentId]);
-
-  // Modal (Fehler / Warnung)
-  const [modalOpen, setModalOpen] = useState(false);
-  const [modalText, setModalText] = useState('');
+  const [rows, setRows] = useState<StudentRow[]>([]);
+  const [loadingList, setLoadingList] = useState(false);
 
   useEffect(() => {
     (async () => {
       const { data } = await supabase.auth.getSession();
       if (!data.session) return (window.location.href = '/login');
+
       const role = await fetchRole();
       if (role !== 'admin') return (window.location.href = '/teacher');
+
       setReady(true);
       await loadStudents();
     })();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   async function loadStudents() {
-    // ⚠️ Falls deine Tabelle anders heißt: hier anpassen (z.B. sb_students)
-    const { data, error } = await supabase
-      .from('sb_students')
-      .select('student_id,class')
-      .order('class', { ascending: true })
-      .order('student_id', { ascending: true });
+    setLoadingList(true);
+    setMsg(null);
+    try {
+      const { data, error } = await supabase
+        .from('sb_students')
+        .select('student_id, class_id, active, created_at')
+        .order('class_id', { ascending: true })
+        .order('student_id', { ascending: true });
 
-    if (error) {
-      // Wenn Tabelle anders heißt, bekommst du hier den Hinweis
-      setMsg(error.message);
-      return;
+      if (error) throw error;
+      setRows((data ?? []) as StudentRow[]);
+    } catch (e: any) {
+      setMsg(e?.message ?? 'Unbekannter Fehler beim Laden.');
+    } finally {
+      setLoadingList(false);
     }
-    setStudents((data ?? []) as any);
   }
 
-  async function upsertStudent() {
-    setMsg(null); setOk(null);
+  async function saveStudent() {
+    setMsg(null);
+    setOk(null);
+
     try {
       const sid = studentId.trim();
-      if (!sid) throw new Error('Bitte Schüler-Code (student_id) eingeben/scannen.');
-      const cls = studentClass.trim() || null;
+      const cid = classId.trim();
+
+      if (!sid) throw new Error('Schüler-Code fehlt (z.B. S0001).');
+      if (!cid) throw new Error('Klasse fehlt (z.B. 5a).');
 
       const { error } = await supabase
         .from('sb_students')
-        .upsert({ student_id: sid, class: cls }, { onConflict: 'student_id' });
+        .upsert(
+          {
+            student_id: sid,
+            class_id: cid,     // ✅ WICHTIG: class_id, nicht class
+            active: true,
+          },
+          { onConflict: 'student_id' }
+        );
 
       if (error) throw error;
-      setOk('Schüler gespeichert.');
+
+      setOk(`Schüler ${sid} (${cid}) gespeichert.`);
       await loadStudents();
     } catch (e: any) {
-      setMsg(e?.message ?? 'Unbekannter Fehler');
+      setMsg(e?.message ?? 'Unbekannter Fehler beim Speichern.');
     }
   }
 
-  async function issueBookToStudent() {
-    setMsg(null); setOk(null);
+  // Buch -> Schüler (Admin)
+  async function assignBookToStudent() {
+    setMsg(null);
+    setOk(null);
+
     try {
       const sid = studentId.trim();
-      const code = scan.trim();
-      if (!sid) throw new Error('Erst Schüler-Code (student_id) setzen/scannen.');
+      const code = bookCode.trim();
+
+      if (!sid) throw new Error('Schüler-Code fehlt.');
       if (!code) throw new Error('Buch-Code fehlt.');
 
-      // ✅ Buch -> Schüler
-      const { error } = await supabase.rpc('sb_issue_book', {
-        p_book_code: code,
-        p_student_id: sid,
-      });
-      if (error) throw error;
-
-      setOk(`Buch ${code} zu Schüler ${sid} zugewiesen.`);
-      setScan('');
-    } catch (e: any) {
-      setMsg(e?.message ?? 'Unbekannter Fehler');
-    }
-  }
-
-  async function returnBookToStorage() {
-    setMsg(null); setOk(null);
-    try {
-      const code = scan.trim();
-      if (!code) throw new Error('Buch-Code fehlt.');
-
-      // ✅ Buch -> Lager
-      const { error } = await supabase.rpc('sb_return_book', {
+      // ✅ Wir nehmen die Admin-Scan-Funktion (bei dir existiert sb_scan_book_admin)
+      // Falls dein RPC andere Parameternamen hat: Supabase -> SQL Editor -> Routine Parameter List -> sb_scan_book_admin
+      const { error } = await supabase.rpc('sb_scan_book_admin', {
         p_scan: code,
+        p_new_holder_type: 'student',
+        p_new_holder_id: sid,
+        p_note: null,
       });
+
       if (error) throw error;
 
-      setOk(`Buch ${code} ins Lager zurückgebucht.`);
-      setScan('');
+      setOk(`Buch ${code} → Schüler ${sid}`);
+      setBookCode('');
     } catch (e: any) {
-      setMsg(e?.message ?? 'Unbekannter Fehler');
+      setMsg(e?.message ?? 'Unbekannter Fehler beim Zuweisen.');
     }
   }
 
-  function openHelp(text: string) {
-    setModalText(text);
-    setModalOpen(true);
+  // Buch -> Lager (Admin)
+  async function assignBookToStorage() {
+    setMsg(null);
+    setOk(null);
+
+    try {
+      const code = bookCode.trim();
+      if (!code) throw new Error('Buch-Code fehlt.');
+
+      const { error } = await supabase.rpc('sb_scan_book_admin', {
+        p_scan: code,
+        p_new_holder_type: 'storage',
+        p_new_holder_id: 'storage',
+        p_note: null,
+      });
+
+      if (error) throw error;
+
+      setOk(`Buch ${code} → Lager`);
+      setBookCode('');
+    } catch (e: any) {
+      setMsg(e?.message ?? 'Unbekannter Fehler beim Einlagern.');
+    }
   }
 
-  if (!ready) {
-    return (
-      <div className="container">
-        <div className="card">
-          <div className="h1">Schüler</div>
-          <p className="sub">Lade…</p>
-        </div>
-      </div>
-    );
-  }
+  const filtered = useMemo(() => {
+    // optional: kleine Filterlogik (leer = alle)
+    const cid = classId.trim().toLowerCase();
+    const sid = studentId.trim().toLowerCase();
+    return rows.filter(r => {
+      const okClass = cid ? (r.class_id ?? '').toLowerCase().includes(cid) : true;
+      const okStudent = sid ? (r.student_id ?? '').toLowerCase().includes(sid) : true;
+      return okClass && okStudent;
+    });
+  }, [rows, classId, studentId]);
+
+  if (!ready) return <div style={{ padding: 20 }}>Lade…</div>;
 
   return (
-    <div className="container">
+    <div style={{ padding: 16 }}>
       <Topbar title="Admin · Schüler" />
 
-      <div className="card">
-        <div className="row">
-          <div className="badge">Schüler (Code + Klasse) · Scannen & Zuweisen</div>
-          <div className="spacer" />
-          <button className="btn secondary" onClick={() => (window.location.href = '/admin')}>← Dashboard</button>
-          <button className="btn secondary" onClick={() => (window.location.href = '/teacher')}>Zur Lehrkräfte-Ansicht</button>
-        </div>
-
-        <div style={{ height: 12 }} />
-
-        <div className="row">
-          <input
-            className="input"
-            value={studentClass}
-            onChange={(e) => setStudentClass(e.target.value)}
-            placeholder="Klasse (z.B. 7b)"
-            style={{ maxWidth: 220 }}
-          />
-          <input
-            className="input"
-            value={studentId}
-            onChange={(e) => setStudentId(e.target.value)}
-            placeholder="Schüler-Code (student_id) scannen/eingeben"
-            style={{ maxWidth: 380 }}
-          />
-          <button className="btn ok" onClick={upsertStudent}>Schüler speichern</button>
-          <button className="btn secondary" onClick={() => openHelp('Du nutzt keine Namen: Nur Klasse + Schüler-Code.\n\n1) Klasse + Code eingeben/scannen\n2) „Schüler speichern“\n3) Dann Bücher scannen und zuweisen.')}>?</button>
-        </div>
-
-        <div style={{ height: 12 }} />
-        <hr className="sep" />
-
-        <div className="row">
-          <input
-            className="input"
-            value={scan}
-            onChange={(e) => setScan(e.target.value)}
-            placeholder="Buch-Code scannen (z.B. 9149)"
-            style={{ maxWidth: 380 }}
-          />
-          <button className="btn ok" onClick={issueBookToStudent}>Buch → Schüler</button>
-          <button className="btn secondary" onClick={returnBookToStorage}>Buch → Lager</button>
-        </div>
-
-        {msg && <>
-          <hr className="sep" />
-          <div className="small" style={{ color: 'rgba(255,93,108,.95)' }}>{msg}</div>
-        </>}
-        {ok && <>
-          <hr className="sep" />
-          <div className="small" style={{ color: 'rgba(46,229,157,.95)', fontWeight: 800 }}>{ok}</div>
-        </>}
-
-        <hr className="sep" />
-
-        <div className="small" style={{ marginBottom: 8, opacity: 0.9 }}>
-          Gespeicherte Schüler (nur Code + Klasse):
-        </div>
-
-        <div className="card" style={{ background: 'rgba(255,255,255,0.04)' }}>
-          {filtered.length === 0 ? (
-            <div className="small" style={{ opacity: 0.7 }}>Keine Treffer.</div>
-          ) : (
-            <div style={{ display: 'grid', gap: 8 }}>
-              {filtered.map(s => (
-                <div key={s.student_id} className="row" style={{ alignItems: 'center' }}>
-                  <div className="badge" style={{ minWidth: 90, justifyContent: 'center' }}>
-                    {s.class ?? '—'}
-                  </div>
-                  <div className="kbd">{s.student_id}</div>
-                  <div className="spacer" />
-                  <button className="btn secondary" onClick={() => setStudentId(s.student_id)}>
-                    Als aktiven Schüler wählen
-                  </button>
-                </div>
-              ))}
-            </div>
-          )}
-        </div>
+      <div style={{ display: 'flex', gap: 10, marginTop: 10, flexWrap: 'wrap' }}>
+        <button onClick={() => (window.location.href = '/admin')}>← Dashboard</button>
+        <button onClick={() => (window.location.href = '/teacher')}>Zur Lehrkräfte-Ansicht</button>
+        <button onClick={() => supabase.auth.signOut().then(() => (window.location.href = '/login'))}>
+          Logout
+        </button>
       </div>
 
-      <Modal open={modalOpen} title="Hinweis" onClose={() => setModalOpen(false)}>
-        <pre style={{ whiteSpace: 'pre-wrap', margin: 0 }}>{modalText}</pre>
-      </Modal>
+      <h3 style={{ marginTop: 16 }}>Schüler (Code + Klasse) anlegen</h3>
+
+      <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap', alignItems: 'center' }}>
+        <input
+          placeholder="Klasse (z.B. 5a)"
+          value={classId}
+          onChange={(e) => setClassId(e.target.value)}
+          style={{ padding: 8, minWidth: 160 }}
+        />
+        <input
+          placeholder="Schüler-Code (z.B. S0001)"
+          value={studentId}
+          onChange={(e) => setStudentId(e.target.value)}
+          style={{ padding: 8, minWidth: 180 }}
+        />
+        <button onClick={saveStudent} style={{ padding: '8px 12px' }}>
+          Schüler speichern
+        </button>
+        <button onClick={loadStudents} style={{ padding: '8px 12px' }}>
+          Liste aktualisieren
+        </button>
+      </div>
+
+      <h3 style={{ marginTop: 16 }}>Buch scannen</h3>
+
+      <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap', alignItems: 'center' }}>
+        <input
+          placeholder="Buch-Code scannen (z.B. 9149)"
+          value={bookCode}
+          onChange={(e) => setBookCode(e.target.value)}
+          style={{ padding: 8, minWidth: 260 }}
+        />
+        <button onClick={assignBookToStudent} style={{ padding: '8px 12px' }}>
+          Buch → Schüler
+        </button>
+        <button onClick={assignBookToStorage} style={{ padding: '8px 12px' }}>
+          Buch → Lager
+        </button>
+      </div>
+
+      {msg && <div style={{ marginTop: 12, color: 'crimson' }}>{msg}</div>}
+      {ok && <div style={{ marginTop: 12, color: 'limegreen' }}>{ok}</div>}
+
+      <h3 style={{ marginTop: 18 }}>Gespeicherte Schüler (nur Code + Klasse)</h3>
+      {loadingList ? (
+        <div>Lade Liste…</div>
+      ) : (
+        <div style={{ marginTop: 8 }}>
+          {filtered.length === 0 ? (
+            <div>Keine Treffer.</div>
+          ) : (
+            <ul>
+              {filtered.map((r) => (
+                <li key={r.student_id}>
+                  <b>{r.student_id}</b> — Klasse: <b>{r.class_id ?? '-'}</b> — aktiv:{' '}
+                  {String(r.active ?? true)}
+                </li>
+              ))}
+            </ul>
+          )}
+        </div>
+      )}
     </div>
   );
 }
