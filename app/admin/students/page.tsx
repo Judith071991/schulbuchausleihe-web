@@ -2,8 +2,8 @@
 
 import { useEffect, useMemo, useState } from 'react';
 import Topbar from '../../../components/Topbar';
-import { supabase } from '../../../../lib/supabaseClient';
-import { fetchRole } from '../../../../lib/role';
+import { supabase } from '../../../lib/supabaseClient';
+import { fetchRole } from '../../../lib/role';
 
 type StudentRow = {
   student_id: string;
