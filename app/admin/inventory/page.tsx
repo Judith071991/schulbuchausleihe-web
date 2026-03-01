@@ -57,20 +57,8 @@ type StudentRequiredRow = {
 };
 // ===== /Soll–Ist pro Schüler =====
 
-// ===== Fehlende Schüler pro Klasse+Titel (View sb_class_title_missing_students) =====
+// ===== NEU: Fehlende Schüler pro Klasse+Titel (View sb_class_title_missing_students) =====
 type MissingStudentRow = {
-  class_id: string;
-  student_id: string;
-  title_id: string;
-  subject: string | null;
-  title_name: string | null;
-  isbn: string | null;
-  price_eur: number | null;
-};
-// ===== /fehlend =====
-
-// ===== NEU: „Zu viel“ Schüler pro Klasse+Titel (View sb_class_title_extra_students) =====
-type ExtraStudentRow = {
   class_id: string;
   student_id: string;
   title_id: string;
@@ -91,14 +79,13 @@ export default function AdminInventoryPage() {
   const [msg, setMsg] = useState<string | null>(null);
   const [ok, setOk] = useState<string | null>(null);
 
-const [titleId, setTitleId] = useState('PO_TEAM_1');
-const [subject, setSubject] = useState('Politik');
-const [titleName, setTitleName] = useState('Team 1');
-const [priceEur, setPriceEur] = useState('32.95');
-const [bookCodes, setBookCodes] = useState('9149,29171,...');
+  const [titleId, setTitleId] = useState('PO_TEAM_1');
+  const [subject, setSubject] = useState('Politik');
+  const [titleName, setTitleName] = useState('Team 1');
+  const [isbn, setIsbn] = useState('');
+  const [priceEur, setPriceEur] = useState('32.95');
 
-  // ✅ WICHTIG: Eingabefeld standardmäßig leer
-  const [bookCodes, setBookCodes] = useState<string>('');
+  const [bookCodes, setBookCodes] = useState('9149,29171,2066,2084,9165,2014,2101,2004,2116');
 
   const [status, setStatus] = useState<'ok' | 'active'>('ok');
   const [condition, setCondition] = useState<'ok' | 'used' | 'damaged'>('ok');
@@ -158,33 +145,6 @@ const [bookCodes, setBookCodes] = useState('9149,29171,...');
     }
   }
   // ===== /Auto-Fill =====
-
-  // ===== NEU: Letzte Aktion rückgängig machen (Undo) =====
-  const [undoBusy, setUndoBusy] = useState(false);
-  const [undoMsg, setUndoMsg] = useState<string | null>(null);
-  const [undoOk, setUndoOk] = useState<string | null>(null);
-
-  async function undoLastAction() {
-    setUndoMsg(null);
-    setUndoOk(null);
-    setUndoBusy(true);
-    try {
-      // Erwartet eine RPC in Supabase:
-      // sb_undo_last_action() -> macht die letzte Scan/Aktion (von diesem Admin) rückgängig
-      const { data, error } = await supabase.rpc('sb_undo_last_action');
-      if (error) throw error;
-
-      setUndoOk(String(data ?? 'Letzte Aktion wurde rückgängig gemacht.'));
-      await loadSummary();
-      await loadClassCheck();
-      if (checkStudentId.trim()) await loadStudentCheck();
-    } catch (e: any) {
-      setUndoMsg(e?.message ?? 'Undo fehlgeschlagen.');
-    } finally {
-      setUndoBusy(false);
-    }
-  }
-  // ===== /Undo =====
 
   // ===== Titel-Übersicht (Schüler/Lehrer/Lager) =====
   const [sumLoading, setSumLoading] = useState(false);
@@ -488,7 +448,7 @@ const [bookCodes, setBookCodes] = useState('9149,29171,...');
       const { data, error } = await supabase
         .from('sb_class_title_missing_students')
         .select('class_id,student_id,title_id,subject,title_name,isbn,price_eur')
-        .ilike('class_id', cid)
+        .ilike('class_id', cid) // WICHTIG: ilike
         .eq('title_id', r.title_id)
         .order('student_id', { ascending: true });
 
@@ -509,49 +469,6 @@ const [bookCodes, setBookCodes] = useState('9149,29171,...');
     setMissingErr(null);
   }
   // ===== /Wer fehlt =====
-
-  // ===== NEU: „Wer hat zu viel?“ =====
-  const [extraOpen, setExtraOpen] = useState(false);
-  const [extraTitle, setExtraTitle] = useState<{ title_id: string; title_name?: string | null; subject?: string | null } | null>(null);
-  const [extraRows, setExtraRows] = useState<ExtraStudentRow[]>([]);
-  const [extraLoading, setExtraLoading] = useState(false);
-  const [extraErr, setExtraErr] = useState<string | null>(null);
-
-  async function loadExtraStudentsForTitle(r: ClassRequiredRow) {
-    setExtraErr(null);
-    setExtraLoading(true);
-    setExtraOpen(true);
-    setExtraTitle({ title_id: r.title_id, title_name: r.title_name, subject: r.subject });
-
-    try {
-      const cid = checkClassId.trim();
-      if (!cid) throw new Error('Klasse fehlt.');
-      if (!r?.title_id) throw new Error('Titel fehlt.');
-
-      const { data, error } = await supabase
-        .from('sb_class_title_extra_students')
-        .select('class_id,student_id,title_id,subject,title_name,isbn,price_eur')
-        .ilike('class_id', cid)
-        .eq('title_id', r.title_id)
-        .order('student_id', { ascending: true });
-
-      if (error) throw error;
-      setExtraRows((data ?? []) as any);
-    } catch (e: any) {
-      setExtraErr(e?.message ?? 'Fehler beim Laden der „zu viel“-Schüler.');
-      setExtraRows([]);
-    } finally {
-      setExtraLoading(false);
-    }
-  }
-
-  function closeExtra() {
-    setExtraOpen(false);
-    setExtraTitle(null);
-    setExtraRows([]);
-    setExtraErr(null);
-  }
-  // ===== /NEU =====
 
   useEffect(() => {
     (async () => {
@@ -597,9 +514,6 @@ const [bookCodes, setBookCodes] = useState('9149,29171,...');
 
       loadSummary();
       autoFillFromTitle(titleId);
-
-      // optional: nach Speichern Feld leeren (damit es nicht „gefüllt bleibt“)
-      setBookCodes('');
     } catch (e: any) {
       setMsg(e?.message ?? 'Unbekannter Fehler');
     }
@@ -628,30 +542,6 @@ const [bookCodes, setBookCodes] = useState('9149,29171,...');
             Zurück zum Dashboard
           </button>
         </div>
-
-        <div style={{ height: 10 }} />
-
-        {/* ===== NEU: Undo Button ===== */}
-        <div className="row" style={{ flexWrap: 'wrap', gap: 10 }}>
-          <button className="btn secondary" onClick={undoLastAction} disabled={undoBusy}>
-            {undoBusy ? 'Rückgängig…' : 'Letzte Aktion rückgängig'}
-          </button>
-          <div className="small" style={{ opacity: 0.8 }}>
-            (macht die letzte Scan/Zuweisungs-Aktion rückgängig)
-          </div>
-        </div>
-
-        {undoMsg ? (
-          <div className="small" style={{ marginTop: 8, color: 'rgba(255,93,108,.95)', whiteSpace: 'pre-wrap' }}>
-            {undoMsg}
-          </div>
-        ) : null}
-        {undoOk ? (
-          <div className="small" style={{ marginTop: 8, color: 'rgba(46,229,157,.95)', fontWeight: 800, whiteSpace: 'pre-wrap' }}>
-            {undoOk}
-          </div>
-        ) : null}
-        {/* ===== /NEU ===== */}
 
         <div style={{ height: 12 }} />
 
@@ -756,9 +646,6 @@ const [bookCodes, setBookCodes] = useState('9149,29171,...');
               >
                 Vorhandene Codes an Eingabefeld anhängen
               </button>
-              <button className="btn secondary" onClick={() => setBookCodes('')}>
-                Eingabefeld leeren
-              </button>
             </div>
           </div>
         ) : (
@@ -812,14 +699,18 @@ const [bookCodes, setBookCodes] = useState('9149,29171,...');
         {msg && (
           <>
             <hr className="sep" />
-            <div className="small" style={{ color: 'rgba(255,93,108,.95)' }}>{msg}</div>
+            <div className="small" style={{ color: 'rgba(255,93,108,.95)' }}>
+              {msg}
+            </div>
           </>
         )}
 
         {ok && (
           <>
             <hr className="sep" />
-            <div className="small" style={{ color: 'rgba(46,229,157,.95)', fontWeight: 800 }}>{ok}</div>
+            <div className="small" style={{ color: 'rgba(46,229,157,.95)', fontWeight: 800 }}>
+              {ok}
+            </div>
           </>
         )}
       </div>
@@ -1010,27 +901,17 @@ const [bookCodes, setBookCodes] = useState('9149,29171,...');
                       <td style={{ padding: 8 }}>
                         {okRow ? (
                           <span className="badge">OK</span>
-                        ) : (
+                        ) : missing > 0 ? (
                           <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
-                            {missing > 0 ? (
-                              <>
-                                <button className="btn ok" style={{ padding: '6px 10px' }} onClick={() => openAssign(r)}>
-                                  Jetzt zuweisen
-                                </button>
-                                <button className="btn secondary" style={{ padding: '6px 10px' }} onClick={() => loadMissingStudentsForTitle(r)}>
-                                  Wer fehlt?
-                                </button>
-                              </>
-                            ) : null}
-
-                            {extra > 0 ? (
-                              <button className="btn secondary" style={{ padding: '6px 10px' }} onClick={() => loadExtraStudentsForTitle(r)}>
-                                Wer hat zu viel?
-                              </button>
-                            ) : null}
-
-                            {missing === 0 && extra > 0 ? <span className="badge">Prüfen</span> : null}
+                            <button className="btn ok" style={{ padding: '6px 10px' }} onClick={() => openAssign(r)}>
+                              Jetzt zuweisen
+                            </button>
+                            <button className="btn secondary" style={{ padding: '6px 10px' }} onClick={() => loadMissingStudentsForTitle(r)}>
+                              Wer fehlt?
+                            </button>
                           </div>
+                        ) : (
+                          <span className="badge">Prüfen</span>
                         )}
                       </td>
                     </tr>
@@ -1045,9 +926,7 @@ const [bookCodes, setBookCodes] = useState('9149,29171,...');
         {assignOpen && assignTitle ? (
           <>
             <hr className="sep" />
-            <div className="badge">
-              Jetzt zuweisen: {assignTitle.subject ?? ''} · {assignTitle.title_name ?? assignTitle.title_id}
-            </div>
+            <div className="badge">Jetzt zuweisen: {assignTitle.subject ?? ''} · {assignTitle.title_name ?? assignTitle.title_id}</div>
             <div style={{ height: 10 }} />
 
             <div className="row" style={{ flexWrap: 'wrap', gap: 10 }}>
@@ -1094,8 +973,7 @@ const [bookCodes, setBookCodes] = useState('9149,29171,...');
             <hr className="sep" />
             <div className="row">
               <div className="badge">
-                Fehlt bei Schülern: {missingTitle.subject ?? ''} · {missingTitle.title_name ?? missingTitle.title_id} ({missingTitle.title_id}) · Klasse{' '}
-                {checkClassId.trim()}
+                Fehlt bei Schülern: {missingTitle.subject ?? ''} · {missingTitle.title_name ?? missingTitle.title_id} ({missingTitle.title_id}) · Klasse {checkClassId.trim()}
               </div>
               <div className="spacer" />
               <button className="btn secondary" onClick={closeMissing} disabled={missingLoading}>
@@ -1104,9 +982,7 @@ const [bookCodes, setBookCodes] = useState('9149,29171,...');
             </div>
 
             {missingLoading ? (
-              <div className="small" style={{ marginTop: 10 }}>
-                Lade…
-              </div>
+              <div className="small" style={{ marginTop: 10 }}>Lade…</div>
             ) : missingErr ? (
               <div className="small" style={{ marginTop: 10, color: 'rgba(255,93,108,.95)', whiteSpace: 'pre-wrap' }}>
                 {missingErr}
@@ -1122,11 +998,10 @@ const [bookCodes, setBookCodes] = useState('9149,29171,...');
                     <div style={{ marginBottom: 8, opacity: 0.85 }}>
                       Anzahl: <b>{missingRows.length}</b>
                     </div>
+
                     <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap' }}>
                       {missingRows.map((m) => (
-                        <span key={m.student_id} className="badge">
-                          {m.student_id}
-                        </span>
+                        <span key={m.student_id} className="badge">{m.student_id}</span>
                       ))}
                     </div>
                   </>
@@ -1136,58 +1011,6 @@ const [bookCodes, setBookCodes] = useState('9149,29171,...');
           </>
         ) : null}
         {/* ===== /Wer fehlt ===== */}
-
-        {/* ===== NEU: Zu viel anzeigen (Wer hat zu viel?) ===== */}
-        {extraOpen && extraTitle ? (
-          <>
-            <hr className="sep" />
-            <div className="row">
-              <div className="badge">
-                Zu viel bei Schülern: {extraTitle.subject ?? ''} · {extraTitle.title_name ?? extraTitle.title_id} ({extraTitle.title_id}) · Klasse{' '}
-                {checkClassId.trim()}
-              </div>
-              <div className="spacer" />
-              <button className="btn secondary" onClick={closeExtra} disabled={extraLoading}>
-                Schließen
-              </button>
-            </div>
-
-            {extraLoading ? (
-              <div className="small" style={{ marginTop: 10 }}>
-                Lade…
-              </div>
-            ) : extraErr ? (
-              <div className="small" style={{ marginTop: 10, color: 'rgba(255,93,108,.95)', whiteSpace: 'pre-wrap' }}>
-                {extraErr}
-                {'\n\n'}
-                Hinweis: Prüfe, ob die View <b>sb_class_title_extra_students</b> existiert und lesbar ist.
-              </div>
-            ) : (
-              <div className="small" style={{ marginTop: 10, lineHeight: 1.8 }}>
-                {extraRows.length === 0 ? (
-                  <div>Keine „zu viel“-Schüler gefunden.</div>
-                ) : (
-                  <>
-                    <div style={{ marginBottom: 8, opacity: 0.85 }}>
-                      Anzahl: <b>{extraRows.length}</b>
-                    </div>
-                    <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap' }}>
-                      {extraRows.map((m) => (
-                        <span key={m.student_id} className="badge">
-                          {m.student_id}
-                        </span>
-                      ))}
-                    </div>
-                    <div className="small" style={{ marginTop: 8, opacity: 0.8 }}>
-                      Hinweis: „zu viel“ bedeutet hier: Schüler hat das Buch, obwohl er es laut Soll-Liste nicht haben sollte (oder doppelt).
-                    </div>
-                  </>
-                )}
-              </div>
-            )}
-          </>
-        ) : null}
-        {/* ===== /NEU ===== */}
 
         <div style={{ height: 6 }} />
         <div className="small" style={{ opacity: 0.75 }}>
@@ -1219,9 +1042,7 @@ const [bookCodes, setBookCodes] = useState('9149,29171,...');
             Abgleich laden
           </button>
 
-          <div className="badge">
-            Klasse: <b>{studentClassId || '-'}</b>
-          </div>
+          <div className="badge">Klasse: <b>{studentClassId || '-'}</b></div>
 
           <input
             className="input"
