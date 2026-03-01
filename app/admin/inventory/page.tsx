@@ -95,7 +95,7 @@ const [titleId, setTitleId] = useState('PO_TEAM_1');
 const [subject, setSubject] = useState('Politik');
 const [titleName, setTitleName] = useState('Team 1');
 const [priceEur, setPriceEur] = useState('32.95');
-const [bookCodes, setBookCodes] = useState('');
+const [bookCodes, setBookCodes] = useState('9149,29171,...');
 
   // ✅ WICHTIG: Eingabefeld standardmäßig leer
   const [bookCodes, setBookCodes] = useState<string>('');
