@@ -91,10 +91,10 @@ export default function AdminInventoryPage() {
   const [msg, setMsg] = useState<string | null>(null);
   const [ok, setOk] = useState<string | null>(null);
 
-const [titleId, setTitleId] = useState('');
-const [subject, setSubject] = useState('');
-const [titleName, setTitleName] = useState('');
-const [priceEur, setPriceEur] = useState('');
+const [titleId, setTitleId] = useState('PO_TEAM_1');
+const [subject, setSubject] = useState('Politik');
+const [titleName, setTitleName] = useState('Team 1');
+const [priceEur, setPriceEur] = useState('32.95');
 const [bookCodes, setBookCodes] = useState('');
 
   // ✅ WICHTIG: Eingabefeld standardmäßig leer
