@@ -475,13 +475,18 @@ export default function AdminInventoryPage() {
   // ===== /Wer fehlt =====
 
   // ===== NEU: „Wer hat zu viel?“ =====
-  const [extraOpen, setExtraOpen] = useState(false);
-  const [extraTitle, setExtraTitle] = useState<{ title_id: string; title_name?: string | null; subject?: string | null } | null>(null);
-  const [extraRows, setExtraRows] = useState<ExtraStudentRow[]>([]);
-  const [extraLoading, setExtraLoading] = useState(false);
-  const [extraErr, setExtraErr] = useState<string | null>(null);
+type ExtraStudentRow = {
+  student_id: string;
+  cnt_extra: number | null;
+};
 
- async function loadExtraStudentsForTitle(r: ClassRequiredRow) {
+const [extraOpen, setExtraOpen] = useState(false);
+const [extraTitle, setExtraTitle] = useState<{ title_id: string; title_name?: string | null; subject?: string | null } | null>(null);
+const [extraRows, setExtraRows] = useState<ExtraStudentRow[]>([]);
+const [extraLoading, setExtraLoading] = useState(false);
+const [extraErr, setExtraErr] = useState<string | null>(null);
+
+async function loadExtraStudentsForTitle(r: ClassRequiredRow) {
   setExtraErr(null);
   setExtraLoading(true);
   setExtraOpen(true);
@@ -493,52 +498,32 @@ export default function AdminInventoryPage() {
     if (!cid) throw new Error('Klasse fehlt.');
     if (!r?.title_id) throw new Error('Titel fehlt.');
 
-    // Direkt aus der View filtern (stabiler als sb_students -> studentIds)
-    const { data: rows, error } = await supabase
+    const { data, error } = await supabase
       .from('sb_student_required_check')
       .select('student_id,cnt_extra')
-      .ilike('class_id', cid)       // nutzt dieselbe Klasse wie dein Abgleich
+      .ilike('class_id', cid)
       .eq('title_id', r.title_id)
       .gt('cnt_extra', 0)
       .order('student_id', { ascending: true });
 
     if (error) throw error;
 
-    setExtraRows((rows ?? []) as any);
+    setExtraRows((data ?? []) as any);
   } catch (e: any) {
     setExtraErr(e?.message ?? 'Fehler beim Laden der Extra-Schüler.');
     setExtraRows([]);
   } finally {
     setExtraLoading(false);
   }
+}
 
-      // 2) in sb_student_required_check nach cnt_extra > 0 für diesen Titel filtern
-      const { data: rows, error: e2 } = await supabase
-        .from('sb_student_required_check')
-        .select('student_id,cnt_extra')
-        .eq('title_id', r.title_id)
-        .in('student_id', studentIds)
-        .gt('cnt_extra', 0)
-        .order('student_id', { ascending: true });
-
-      if (e2) throw e2;
-
-      setExtraRows((rows ?? []) as any);
-    } catch (e: any) {
-      setExtraErr(e?.message ?? 'Fehler beim Laden der Extra-Schüler.');
-      setExtraRows([]);
-    } finally {
-      setExtraLoading(false);
-    }
-  }
-
-  function closeExtra() {
-    setExtraOpen(false);
-    setExtraTitle(null);
-    setExtraRows([]);
-    setExtraErr(null);
-  }
-  // ===== /NEU =====
+function closeExtra() {
+  setExtraOpen(false);
+  setExtraTitle(null);
+  setExtraRows([]);
+  setExtraErr(null);
+}
+// ===== /NEU =====
 
   useEffect(() => {
     (async () => {
