@@ -511,7 +511,6 @@ export default function AdminInventoryPage() {
   } finally {
     setExtraLoading(false);
   }
-}
 
       // 2) in sb_student_required_check nach cnt_extra > 0 für diesen Titel filtern
       const { data: rows, error: e2 } = await supabase
