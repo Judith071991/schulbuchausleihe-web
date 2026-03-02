@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import Topbar from '../../../components/Topbar';
 import { supabase } from '../../../lib/supabaseClient';
 import { fetchRole } from '../../../lib/role';
@@ -10,6 +10,18 @@ type TeacherRow = {
   active: boolean;
   created_at: string;
 };
+
+type TeacherBookRow = {
+  book_code: string;
+  title_id: string | null;
+  title_name: string | null;
+  subject: string | null;
+  isbn: string | null;
+};
+
+function safeStr(x: any) {
+  return x == null ? '' : String(x);
+}
 
 export default function AdminTeachersPage() {
   const [ready, setReady] = useState(false);
@@ -22,10 +34,110 @@ export default function AdminTeachersPage() {
   const [teachers, setTeachers] = useState<TeacherRow[]>([]);
   const [loading, setLoading] = useState(false);
 
-  // ===== NEU: Buch-Scan für Zuweisung =====
+  // ===== Buch-Scan für Zuweisung =====
   const [bookScan, setBookScan] = useState('');
   const [scanBusy, setScanBusy] = useState(false);
-  // ===== /NEU =====
+  // ===== /Buch-Scan =====
+
+  // ===== NEU: Ansicht "Welche Bücher hat welcher Lehrer?" =====
+  const [teacherQuery, setTeacherQuery] = useState('');
+  const filteredTeachers = useMemo(() => {
+    const q = teacherQuery.trim().toLowerCase();
+    if (!q) return teachers;
+    return teachers.filter((t) => {
+      const hay = [t.teacher_id, t.active ? 'aktiv' : 'inaktiv'].join(' ').toLowerCase();
+      return hay.includes(q);
+    });
+  }, [teachers, teacherQuery]);
+
+  const [viewTeacherId, setViewTeacherId] = useState<string>(''); // Auswahl für Anzeige (getrennt von "teacherId" fürs Scannen)
+  const [books, setBooks] = useState<TeacherBookRow[]>([]);
+  const [booksLoading, setBooksLoading] = useState(false);
+  const [booksErr, setBooksErr] = useState<string | null>(null);
+
+  async function loadTeacherBooks(p_teacher_id: string) {
+    setBooksErr(null);
+    setBooksLoading(true);
+    setBooks([]);
+
+    try {
+      const tid = (p_teacher_id || '').trim();
+      if (!tid) throw new Error('Bitte Lehrkraft auswählen.');
+
+      // 1) Buchcodes für Lehrer aus der Zuordnungs-View holen
+      const { data: a, error: aErr } = await supabase
+        .from('sb_current_assignments')
+        .select('book_code,holder_type,holder_id')
+        .eq('holder_type', 'teacher')
+        .eq('holder_id', tid)
+        .order('book_code', { ascending: true });
+
+      if (aErr) throw aErr;
+
+      const codes = (a ?? []).map((x: any) => safeStr(x.book_code)).filter(Boolean);
+      if (codes.length === 0) {
+        setBooks([]);
+        return;
+      }
+
+      // 2) sb_books: title_id pro Buchcode
+      const { data: b, error: bErr } = await supabase
+        .from('sb_books')
+        .select('book_code,title_id')
+        .in('book_code', codes);
+
+      if (bErr) throw bErr;
+
+      const bookRows = (b ?? []) as any[];
+      const titleIds = Array.from(new Set(bookRows.map((x) => safeStr(x.title_id)).filter(Boolean)));
+
+      // 3) sb_titles: Metadaten pro title_id (wenn vorhanden)
+      let titlesMap = new Map<string, { title_name: string | null; subject: string | null; isbn: string | null }>();
+      if (titleIds.length > 0) {
+        const { data: t, error: tErr } = await supabase
+          .from('sb_titles')
+          .select('title_id,title_name,subject,isbn')
+          .in('title_id', titleIds);
+
+        if (tErr) throw tErr;
+
+        for (const row of (t ?? []) as any[]) {
+          titlesMap.set(safeStr(row.title_id), {
+            title_name: row.title_name ?? null,
+            subject: row.subject ?? null,
+            isbn: row.isbn ?? null,
+          });
+        }
+      }
+
+      // zusammenbauen + sortieren
+      const rows: TeacherBookRow[] = bookRows.map((x) => {
+        const tid2 = x.title_id ?? null;
+        const meta = tid2 ? titlesMap.get(String(tid2)) : undefined;
+        return {
+          book_code: safeStr(x.book_code),
+          title_id: tid2,
+          title_name: meta?.title_name ?? null,
+          subject: meta?.subject ?? null,
+          isbn: meta?.isbn ?? null,
+        };
+      });
+
+      rows.sort((r1, r2) => {
+        const a1 = `${r1.subject ?? ''} ${r1.title_name ?? ''} ${r1.title_id ?? ''} ${r1.book_code}`.toLowerCase();
+        const a2 = `${r2.subject ?? ''} ${r2.title_name ?? ''} ${r2.title_id ?? ''} ${r2.book_code}`.toLowerCase();
+        return a1.localeCompare(a2);
+      });
+
+      setBooks(rows);
+    } catch (e: any) {
+      setBooksErr(e?.message ?? 'Fehler beim Laden der Lehrer-Bücher.');
+      setBooks([]);
+    } finally {
+      setBooksLoading(false);
+    }
+  }
+  // ===== /NEU: Ansicht =====
 
   useEffect(() => {
     (async () => {
@@ -101,7 +213,7 @@ export default function AdminTeachersPage() {
     loadTeachers();
   }
 
-  // ===== NEU: Buch -> Lehrkraft =====
+  // ===== Buch -> Lehrkraft =====
   async function assignBookToTeacher() {
     setMsg(null);
     setOk(null);
@@ -121,6 +233,11 @@ export default function AdminTeachersPage() {
 
       setOk(`Buch ${code} → Lehrkraft ${tid} zugewiesen.`);
       setBookScan('');
+
+      // falls gerade diese Lehrkraft in der Anzeige ausgewählt ist: aktualisieren
+      if (viewTeacherId.trim() && viewTeacherId.trim() === tid) {
+        await loadTeacherBooks(viewTeacherId);
+      }
     } catch (e: any) {
       setMsg(e?.message ?? 'Unbekannter Fehler');
     } finally {
@@ -128,7 +245,7 @@ export default function AdminTeachersPage() {
     }
   }
 
-  // ===== NEU: Buch -> Lager =====
+  // ===== Buch -> Lager =====
   async function returnBookToStorage() {
     setMsg(null);
     setOk(null);
@@ -145,13 +262,18 @@ export default function AdminTeachersPage() {
 
       setOk(`Buch ${code} → Lager.`);
       setBookScan('');
+
+      // falls gerade eine Lehrkraft angezeigt wird: neu laden (damit das Buch verschwindet)
+      if (viewTeacherId.trim()) {
+        await loadTeacherBooks(viewTeacherId);
+      }
     } catch (e: any) {
       setMsg(e?.message ?? 'Unbekannter Fehler');
     } finally {
       setScanBusy(false);
     }
   }
-  // ===== /NEU =====
+  // ===== /Buch-Zuweisung =====
 
   if (!ready) {
     return (
@@ -265,7 +387,7 @@ export default function AdminTeachersPage() {
         )}
       </div>
 
-      {/* ===== NEU: Scan / Zuweisen ===== */}
+      {/* ===== Scan / Zuweisen ===== */}
       <div className="card" style={{ marginTop: 14 }}>
         <div className="row">
           <div className="badge">Bücher zuweisen</div>
@@ -301,6 +423,137 @@ export default function AdminTeachersPage() {
             Tipp: erst Lehrkraft wählen/setzen, dann Buchcodes scannen (Enter weist direkt zu).
           </div>
         </div>
+      </div>
+      {/* ===== /Scan ===== */}
+
+      {/* ===== NEU: Lehrer → ausgeliehene Bücher (Dauerhafte Ansicht) ===== */}
+      <div className="card" style={{ marginTop: 14 }}>
+        <div className="row">
+          <div className="badge">Lehrer → ausgeliehene Bücher (nur Anzeige)</div>
+          <div className="spacer" />
+          <button
+            className="btn secondary"
+            onClick={() => {
+              loadTeachers();
+              if (viewTeacherId.trim()) loadTeacherBooks(viewTeacherId);
+            }}
+            disabled={loading || booksLoading}
+          >
+            {(loading || booksLoading) ? 'Lade…' : 'Aktualisieren'}
+          </button>
+        </div>
+
+        <div style={{ height: 12 }} />
+
+        <div className="row" style={{ flexWrap: 'wrap', gap: 10 }}>
+          <input
+            className="input"
+            value={teacherQuery}
+            onChange={(e) => setTeacherQuery(e.target.value)}
+            placeholder="Lehrer suchen (ID)…"
+            style={{ maxWidth: 320 }}
+          />
+
+          <select
+            className="select"
+            value={viewTeacherId}
+            onChange={(e) => {
+              const tid = e.target.value;
+              setViewTeacherId(tid);
+              if (tid) loadTeacherBooks(tid);
+              else setBooks([]);
+            }}
+            style={{ maxWidth: 340 }}
+          >
+            <option value="">— Lehrer auswählen —</option>
+            {filteredTeachers.map((t) => (
+              <option key={t.teacher_id} value={t.teacher_id}>
+                {t.teacher_id} {t.active ? '' : ' (inaktiv)'}
+              </option>
+            ))}
+          </select>
+
+          <button
+            className="btn secondary"
+            onClick={() => {
+              const tid = teacherId.trim();
+              if (!tid) return;
+              setViewTeacherId(tid);
+              loadTeacherBooks(tid);
+            }}
+            disabled={!teacherId.trim()}
+          >
+            Aktive Lehrkraft anzeigen
+          </button>
+
+          <button
+            className="btn ok"
+            onClick={() => (viewTeacherId.trim() ? loadTeacherBooks(viewTeacherId) : null)}
+            disabled={!viewTeacherId.trim() || booksLoading}
+          >
+            {booksLoading ? 'Lade Bücher…' : 'Bücher laden'}
+          </button>
+        </div>
+
+        {booksErr ? (
+          <>
+            <hr className="sep" />
+            <div className="small" style={{ color: 'rgba(255,93,108,.95)', whiteSpace: 'pre-wrap' }}>
+              {booksErr}
+            </div>
+          </>
+        ) : null}
+
+        <hr className="sep" />
+
+        {!viewTeacherId.trim() ? (
+          <div className="small" style={{ opacity: 0.85 }}>
+            Wähle einen Lehrer aus, um seine ausgeliehenen Bücher zu sehen.
+          </div>
+        ) : booksLoading ? (
+          <div className="small" style={{ opacity: 0.85 }}>Lade…</div>
+        ) : books.length === 0 ? (
+          <div className="small" style={{ opacity: 0.85 }}>
+            Keine Bücher gefunden für Lehrer <b>{viewTeacherId.trim()}</b>.
+          </div>
+        ) : (
+          <div style={{ overflowX: 'auto' }}>
+            <div className="small" style={{ opacity: 0.85, marginBottom: 8 }}>
+              Anzahl: <b>{books.length}</b>
+            </div>
+
+            <table className="table" style={{ width: '100%', borderCollapse: 'collapse' }}>
+              <thead>
+                <tr>
+                  <th style={{ textAlign: 'left', padding: 8 }}>Fach</th>
+                  <th style={{ textAlign: 'left', padding: 8 }}>Titel</th>
+                  <th style={{ textAlign: 'left', padding: 8 }}>ISBN</th>
+                  <th style={{ textAlign: 'left', padding: 8 }}>Buchcode</th>
+                </tr>
+              </thead>
+              <tbody>
+                {books.map((x) => (
+                  <tr key={x.book_code} style={{ borderTop: '1px solid rgba(255,255,255,0.10)' }}>
+                    <td style={{ padding: 8, opacity: 0.9 }}>{x.subject ?? '-'}</td>
+                    <td style={{ padding: 8 }}>
+                      <div style={{ fontWeight: 800 }}>{x.title_name ?? x.title_id ?? '-'}</div>
+                      <div className="small" style={{ opacity: 0.75 }}>{x.title_id ?? '-'}</div>
+                    </td>
+                    <td style={{ padding: 8, opacity: 0.9 }}>{x.isbn ?? '-'}</td>
+                    <td style={{ padding: 8 }}>
+                      <span className="kbd">{x.book_code}</span>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+
+            <div style={{ height: 6 }} />
+            <div className="small" style={{ opacity: 0.75 }}>
+              Quelle: <b>sb_current_assignments</b> (Zuordnung) + <b>sb_books</b>/<b>sb_titles</b> (Titelinfos)
+            </div>
+          </div>
+        )}
       </div>
       {/* ===== /NEU ===== */}
     </div>
