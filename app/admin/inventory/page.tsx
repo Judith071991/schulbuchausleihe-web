@@ -528,7 +528,7 @@ export default function AdminInventoryPage() {
     setProblemTitle(null);
     setProblemRows([]);
     setProblemErr(null);
-  }
+     }
   // ===== /Probleme =====
 
   useEffect(() => {
