@@ -481,28 +481,37 @@ export default function AdminInventoryPage() {
   const [extraLoading, setExtraLoading] = useState(false);
   const [extraErr, setExtraErr] = useState<string | null>(null);
 
-  async function loadExtraStudentsForTitle(r: ClassRequiredRow) {
-    setExtraErr(null);
-    setExtraLoading(true);
-    setExtraOpen(true);
-    setExtraTitle({ title_id: r.title_id, title_name: r.title_name, subject: r.subject });
+ async function loadExtraStudentsForTitle(r: ClassRequiredRow) {
+  setExtraErr(null);
+  setExtraLoading(true);
+  setExtraOpen(true);
+  setExtraTitle({ title_id: r.title_id, title_name: r.title_name, subject: r.subject });
+  setExtraRows([]);
+
+  try {
+    const cid = checkClassId.trim();
+    if (!cid) throw new Error('Klasse fehlt.');
+    if (!r?.title_id) throw new Error('Titel fehlt.');
+
+    // Direkt aus der View filtern (stabiler als sb_students -> studentIds)
+    const { data: rows, error } = await supabase
+      .from('sb_student_required_check')
+      .select('student_id,cnt_extra')
+      .ilike('class_id', cid)       // nutzt dieselbe Klasse wie dein Abgleich
+      .eq('title_id', r.title_id)
+      .gt('cnt_extra', 0)
+      .order('student_id', { ascending: true });
+
+    if (error) throw error;
+
+    setExtraRows((rows ?? []) as any);
+  } catch (e: any) {
+    setExtraErr(e?.message ?? 'Fehler beim Laden der Extra-Schüler.');
     setExtraRows([]);
-
-    try {
-      const cid = checkClassId.trim();
-      if (!cid) throw new Error('Klasse fehlt.');
-      if (!r?.title_id) throw new Error('Titel fehlt.');
-
-      // 1) alle Schüler-IDs der Klasse holen
-      const { data: studs, error: e1 } = await supabase.from('sb_students').select('student_id').ilike('class_id', cid);
-
-      if (e1) throw e1;
-
-      const studentIds = (studs ?? []).map((x: any) => String(x.student_id)).filter(Boolean);
-      if (studentIds.length === 0) {
-        setExtraRows([]);
-        return;
-      }
+  } finally {
+    setExtraLoading(false);
+  }
+}
 
       // 2) in sb_student_required_check nach cnt_extra > 0 für diesen Titel filtern
       const { data: rows, error: e2 } = await supabase
