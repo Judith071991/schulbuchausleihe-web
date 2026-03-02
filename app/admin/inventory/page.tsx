@@ -67,6 +67,10 @@ type MissingStudentRow = {
   isbn: string | null;
   price_eur: number | null;
 };
+type ExtraStudentRow = {
+  student_id: string;
+  cnt_extra: number | null;
+};
 // ===== /NEU =====
 
 function euro(n: number | null | undefined) {
@@ -85,7 +89,7 @@ export default function AdminInventoryPage() {
   const [isbn, setIsbn] = useState('');
   const [priceEur, setPriceEur] = useState('32.95');
 
-  const [bookCodes, setBookCodes] = useState('9149,29171,2066,2084,9165,2014,2101,2004,2116');
+  const [bookCodes, setBookCodes] = useState('');
 
   const [status, setStatus] = useState<'ok' | 'active'>('ok');
   const [condition, setCondition] = useState<'ok' | 'used' | 'damaged'>('ok');
@@ -714,6 +718,66 @@ export default function AdminInventoryPage() {
           </>
         )}
       </div>
+      // ===== NEU: „Wer hat zu viel?“ =====
+const [extraOpen, setExtraOpen] = useState(false);
+const [extraTitle, setExtraTitle] = useState<{ title_id: string; title_name?: string | null; subject?: string | null } | null>(null);
+const [extraRows, setExtraRows] = useState<ExtraStudentRow[]>([]);
+const [extraLoading, setExtraLoading] = useState(false);
+const [extraErr, setExtraErr] = useState<string | null>(null);
+
+async function loadExtraStudentsForTitle(r: ClassRequiredRow) {
+  setExtraErr(null);
+  setExtraLoading(true);
+  setExtraOpen(true);
+  setExtraTitle({ title_id: r.title_id, title_name: r.title_name, subject: r.subject });
+  setExtraRows([]);
+
+  try {
+    const cid = checkClassId.trim();
+    if (!cid) throw new Error('Klasse fehlt.');
+    if (!r?.title_id) throw new Error('Titel fehlt.');
+
+    // 1) alle Schüler-IDs der Klasse holen
+    const { data: studs, error: e1 } = await supabase
+      .from('sb_students')
+      .select('student_id')
+      .ilike('class_id', cid);
+
+    if (e1) throw e1;
+
+    const studentIds = (studs ?? []).map((x: any) => String(x.student_id)).filter(Boolean);
+    if (studentIds.length === 0) {
+      setExtraRows([]);
+      return;
+    }
+
+    // 2) in sb_student_required_check nach cnt_extra > 0 für diesen Titel filtern
+    const { data: rows, error: e2 } = await supabase
+      .from('sb_student_required_check')
+      .select('student_id,cnt_extra')
+      .eq('title_id', r.title_id)
+      .in('student_id', studentIds)
+      .gt('cnt_extra', 0)
+      .order('student_id', { ascending: true });
+
+    if (e2) throw e2;
+
+    setExtraRows((rows ?? []) as any);
+  } catch (e: any) {
+    setExtraErr(e?.message ?? 'Fehler beim Laden der Extra-Schüler.');
+    setExtraRows([]);
+  } finally {
+    setExtraLoading(false);
+  }
+}
+
+function closeExtra() {
+  setExtraOpen(false);
+  setExtraTitle(null);
+  setExtraRows([]);
+  setExtraErr(null);
+}
+// ===== /NEU =====
 
       {/* ===== Übersicht pro Titel (Schüler/Lehrer/Lager) ===== */}
       <div className="card" style={{ marginTop: 14 }}>
@@ -911,16 +975,18 @@ export default function AdminInventoryPage() {
                             </button>
                           </div>
                         ) : (
-                          <span className="badge">Prüfen</span>
-                        )}
-                      </td>
-                    </tr>
-                  );
-                })}
-              </tbody>
-            </table>
-          </div>
-        )}
+                          ) : (
+  <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+    <span className="badge">Prüfen</span>
+    <button
+      className="btn secondary"
+      style={{ padding: '6px 10px' }}
+      onClick={() => loadExtraStudentsForTitle(r)}
+    >
+      Wer hat zu viel?
+    </button>
+  </div>
+)}
 
         {/* ===== Zuweisungsfeld (Buchcode → Schüler) ===== */}
         {assignOpen && assignTitle ? (
@@ -1140,6 +1206,50 @@ export default function AdminInventoryPage() {
           Quelle: View <b>sb_student_required_check</b>
         </div>
       </div>
+              {/* ===== NEU: Extra-Schüler anzeigen (Wer hat zu viel?) ===== */}
+{extraOpen && extraTitle ? (
+  <>
+    <hr className="sep" />
+    <div className="row">
+      <div className="badge">
+        Zu viel bei Schülern: {extraTitle.subject ?? ''} · {extraTitle.title_name ?? extraTitle.title_id} ({extraTitle.title_id}) · Klasse {checkClassId.trim()}
+      </div>
+      <div className="spacer" />
+      <button className="btn secondary" onClick={closeExtra} disabled={extraLoading}>
+        Schließen
+      </button>
+    </div>
+
+    {extraLoading ? (
+      <div className="small" style={{ marginTop: 10 }}>Lade…</div>
+    ) : extraErr ? (
+      <div className="small" style={{ marginTop: 10, color: 'rgba(255,93,108,.95)', whiteSpace: 'pre-wrap' }}>
+        {extraErr}
+      </div>
+    ) : (
+      <div className="small" style={{ marginTop: 10, lineHeight: 1.8 }}>
+        {extraRows.length === 0 ? (
+          <div>Keine Schüler mit „zu viel“ gefunden.</div>
+        ) : (
+          <>
+            <div style={{ marginBottom: 8, opacity: 0.85 }}>
+              Anzahl: <b>{extraRows.length}</b>
+            </div>
+
+            <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap' }}>
+              {extraRows.map((m) => (
+                <span key={m.student_id} className="badge">
+                  {m.student_id}{m.cnt_extra != null ? ` (+${m.cnt_extra})` : ''}
+                </span>
+              ))}
+            </div>
+          </>
+        )}
+      </div>
+    )}
+  </>
+) : null}
+{/* ===== /NEU ===== */}
       {/* ===== /Soll–Ist pro Schüler ===== */}
     </div>
   );
