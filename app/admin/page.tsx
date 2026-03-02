@@ -7,7 +7,7 @@ type TeacherRow = {
   teacher_id: string;
   last_name: string | null;
   first_name: string | null;
-  short: string | null;
+  short_name: string | null;
   active: boolean | null;
 };
 
@@ -30,7 +30,7 @@ export default function AdminIndexPage() {
     const q = teacherQuery.trim().toLowerCase();
     if (!q) return teachers;
     return teachers.filter((t) => {
-      const hay = [t.teacher_id, t.last_name ?? '', t.first_name ?? '', t.short ?? ''].join(' ').toLowerCase();
+      const hay = [t.teacher_id, t.last_name ?? '', t.first_name ?? '', t.short_name ?? ''].join(' ').toLowerCase();
       return hay.includes(q);
     });
   }, [teachers, teacherQuery]);
@@ -44,12 +44,10 @@ export default function AdminIndexPage() {
     setTErr(null);
     setTLoading(true);
     try {
-      // Falls deine Tabelle minimaler ist: passe Select-Felder an (teacher_id reicht!)
+      // ✅ Spaltennamen an deine echte Tabelle angepasst: short_name (nicht short)
       const { data, error } = await supabase
         .from('sb_teachers')
-        .select('teacher_id,last_name,first_name,short,active')
-        .order('last_name', { ascending: true })
-        .order('first_name', { ascending: true })
+        .select('teacher_id,last_name,first_name,short_name,active')
         .order('teacher_id', { ascending: true });
 
       if (error) throw error;
@@ -87,9 +85,10 @@ export default function AdminIndexPage() {
       }
 
       // 2) Metadaten zu Buchcodes holen (sb_books + sb_titles)
+      // Hinweis: `sb_titles(...)` funktioniert, wenn FK sb_books.title_id -> sb_titles.title_id existiert
       const { data: b, error: bErr } = await supabase
         .from('sb_books')
-        .select('book_code,title_id, sb_titles(title_name,subject,isbn)')
+        .select('book_code,title_id,sb_titles(title_name,subject,isbn)')
         .in('book_code', codes);
 
       if (bErr) throw bErr;
@@ -118,7 +117,9 @@ export default function AdminIndexPage() {
     }
   }
 
-  // ✅ Redirect bleibt (wie vorher), nur minimal verzögert, damit die Zusatzbox kurz nutzbar ist
+  // ✅ Redirect bleibt (wie vorher), aber wir geben dir zusätzlich:
+  // - einen “Zum Dashboard”-Button
+  // - und wir machen den Redirect etwas länger, damit man auch wirklich klicken kann
   useEffect(() => {
     let cancelled = false;
 
@@ -129,7 +130,7 @@ export default function AdminIndexPage() {
       // Redirect wie vorher:
       setTimeout(() => {
         if (!cancelled) window.location.href = '/admin/dashboard';
-      }, 800);
+      }, 2500);
     })();
 
     return () => {
@@ -139,7 +140,6 @@ export default function AdminIndexPage() {
 
   return (
     <div style={{ padding: 14 }}>
-      {/* Falls Redirect greift, sieht man das kurz. Falls nicht (z.B. lokal), bleibt es als Admin-Startseite nutzbar. */}
       <div
         style={{
           border: '1px solid rgba(255,255,255,0.12)',
@@ -148,10 +148,29 @@ export default function AdminIndexPage() {
           maxWidth: 1100,
           margin: '0 auto',
           background: 'rgba(0,0,0,0.18)',
+          color: 'white',
         }}
       >
-        <div style={{ fontWeight: 800, marginBottom: 8 }}>Lehrer → ausgeliehene Bücher (nur Anzeige)</div>
-        <div style={{ opacity: 0.8, fontSize: 13, marginBottom: 12 }}>
+        <div style={{ display: 'flex', gap: 10, alignItems: 'center', flexWrap: 'wrap' }}>
+          <div style={{ fontWeight: 800 }}>Lehrer → ausgeliehene Bücher (nur Anzeige)</div>
+          <div style={{ flex: 1 }} />
+          <button
+            onClick={() => (window.location.href = '/admin/dashboard')}
+            style={{
+              padding: '8px 10px',
+              borderRadius: 10,
+              border: '1px solid rgba(255,255,255,0.14)',
+              background: 'rgba(255,255,255,0.06)',
+              color: 'white',
+              cursor: 'pointer',
+              fontWeight: 800,
+            }}
+          >
+            Zum Dashboard
+          </button>
+        </div>
+
+        <div style={{ opacity: 0.8, fontSize: 13, marginTop: 8, marginBottom: 12 }}>
           Hinweis: Du wirst gleich automatisch ins Dashboard weitergeleitet. Wenn du hier bleibst (z.B. falls Redirect blockiert), kannst du schnell prüfen, welcher Lehrer welche Bücher hat.
         </div>
 
@@ -204,11 +223,20 @@ export default function AdminIndexPage() {
             }}
           >
             <option value="">— Lehrer auswählen —</option>
-            {filteredTeachers.map((t) => (
-              <option key={t.teacher_id} value={t.teacher_id}>
-                {t.teacher_id} — {(t.last_name ?? '').trim()} {(t.first_name ?? '').trim()} {t.short ? `(${t.short})` : ''}
-              </option>
-            ))}
+            {filteredTeachers.map((t) => {
+              const ln = (t.last_name ?? '').trim();
+              const fn = (t.first_name ?? '').trim();
+              const sn = (t.short_name ?? '').trim();
+              const namePart = [ln, fn].filter(Boolean).join(' ').trim();
+              const suffix = sn ? ` (${sn})` : '';
+              return (
+                <option key={t.teacher_id} value={t.teacher_id}>
+                  {t.teacher_id}
+                  {namePart ? ` — ${namePart}` : ''}
+                  {suffix}
+                </option>
+              );
+            })}
           </select>
 
           <button
@@ -258,7 +286,9 @@ export default function AdminIndexPage() {
                         </td>
                         <td style={{ padding: 8, opacity: 0.9 }}>{x.isbn ?? '-'}</td>
                         <td style={{ padding: 8 }}>
-                          <span style={{ padding: '2px 6px', borderRadius: 8, border: '1px solid rgba(255,255,255,0.14)' }}>{x.book_code}</span>
+                          <span style={{ padding: '2px 6px', borderRadius: 8, border: '1px solid rgba(255,255,255,0.14)' }}>
+                            {x.book_code}
+                          </span>
                         </td>
                       </tr>
                     ))}
