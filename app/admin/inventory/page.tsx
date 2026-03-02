@@ -69,12 +69,18 @@ type MissingStudentRow = {
 };
 // ===== /Fehlende =====
 
-// ===== NEU: Extra-Schüler (aus sb_student_required_check) =====
-type ExtraStudentRow = {
+// ===== Probleme / „zu viel“ (View sb_book_problem_students) =====
+type BookProblemRow = {
+  class_id: string;
+  title_id: string;
   student_id: string;
+  cnt_is: number | null;
+  cnt_should: number | null;
   cnt_extra: number | null;
+  cnt_duplicate: number | null;
+  forbidden_hold: boolean | null;
 };
-// ===== /NEU =====
+// ===== /Probleme =====
 
 function euro(n: number | null | undefined) {
   if (n == null || Number.isNaN(n)) return '-';
@@ -240,7 +246,6 @@ export default function AdminInventoryPage() {
       const cid = checkClassId.trim();
       if (!cid) throw new Error('Bitte Klasse eingeben (z.B. 5a).');
 
-      // WICHTIG: ilike statt eq (5B/5b/Leerzeichen)
       const { data, error } = await supabase
         .from('sb_class_required_check')
         .select('class_id,subject,title_id,title_name,isbn,price_eur,cnt_should,cnt_is,cnt_missing,cnt_extra')
@@ -259,11 +264,11 @@ export default function AdminInventoryPage() {
   }
   // ===== /Soll–Ist =====
 
-  // ===== „Fehlt → Jetzt zuweisen“ (Buchcode eingeben) =====
+  // ===== „Fehlt → Jetzt zuweisen“ =====
   const [assignOpen, setAssignOpen] = useState(false);
   const [assignTitle, setAssignTitle] = useState<{ title_id: string; title_name?: string | null; subject?: string | null } | null>(null);
   const [assignBookCode, setAssignBookCode] = useState('');
-  const [assignStudentId, setAssignStudentId] = useState(''); // optional
+  const [assignStudentId, setAssignStudentId] = useState('');
   const [assignBusy, setAssignBusy] = useState(false);
   const [assignMsg, setAssignMsg] = useState<string | null>(null);
   const [assignOk, setAssignOk] = useState<string | null>(null);
@@ -394,7 +399,11 @@ export default function AdminInventoryPage() {
       const sid = checkStudentId.trim();
       if (!sid) throw new Error('Bitte Schülercode eingeben (z.B. S0001).');
 
-      const { data: sData, error: sErr } = await supabase.from('sb_students').select('student_id,class_id').eq('student_id', sid).maybeSingle();
+      const { data: sData, error: sErr } = await supabase
+        .from('sb_students')
+        .select('student_id,class_id')
+        .eq('student_id', sid)
+        .maybeSingle();
 
       if (sErr) throw sErr;
       const cid = (sData as any)?.class_id ?? '';
@@ -474,56 +483,53 @@ export default function AdminInventoryPage() {
   }
   // ===== /Wer fehlt =====
 
-  // ===== NEU: „Wer hat zu viel?“ =====
-type ExtraStudentRow = {
-  student_id: string;
-  cnt_extra: number | null;
-};
+  // ===== „Wer hat zu viel?“ / Probleme =====
+  const [problemOpen, setProblemOpen] = useState(false);
+  const [problemTitle, setProblemTitle] = useState<{ title_id: string; title_name?: string | null; subject?: string | null } | null>(null);
+  const [problemRows, setProblemRows] = useState<BookProblemRow[]>([]);
+  const [problemLoading, setProblemLoading] = useState(false);
+  const [problemErr, setProblemErr] = useState<string | null>(null);
 
-const [extraOpen, setExtraOpen] = useState(false);
-const [extraTitle, setExtraTitle] = useState<{ title_id: string; title_name?: string | null; subject?: string | null } | null>(null);
-const [extraRows, setExtraRows] = useState<ExtraStudentRow[]>([]);
-const [extraLoading, setExtraLoading] = useState(false);
-const [extraErr, setExtraErr] = useState<string | null>(null);
+  async function loadProblemStudentsForTitle(r: ClassRequiredRow) {
+    setProblemErr(null);
+    setProblemLoading(true);
+    setProblemOpen(true);
+    setProblemTitle({ title_id: r.title_id, title_name: r.title_name, subject: r.subject });
+    setProblemRows([]);
 
-async function loadExtraStudentsForTitle(r: ClassRequiredRow) {
-  setExtraErr(null);
-  setExtraLoading(true);
-  setExtraOpen(true);
-  setExtraTitle({ title_id: r.title_id, title_name: r.title_name, subject: r.subject });
-  setExtraRows([]);
+    try {
+      const cid = checkClassId.trim();
+      if (!cid) throw new Error('Klasse fehlt.');
+      if (!r?.title_id) throw new Error('Titel fehlt.');
 
-  try {
-    const cid = checkClassId.trim();
-    if (!cid) throw new Error('Klasse fehlt.');
-    if (!r?.title_id) throw new Error('Titel fehlt.');
+      // Diese View liefert genau „dürfte nicht haben“ + „doppelt“ + cnt_extra
+      const { data, error } = await supabase
+        .from('sb_book_problem_students')
+        .select('class_id,title_id,student_id,cnt_is,cnt_should,cnt_extra,cnt_duplicate,forbidden_hold')
+        .ilike('class_id', cid)
+        .eq('title_id', r.title_id)
+        // nur echte Probleme anzeigen
+        .or('forbidden_hold.is.true,cnt_duplicate.gt.0,cnt_extra.gt.0')
+        .order('student_id', { ascending: true });
 
-    const { data, error } = await supabase
-      .from('sb_student_required_check')
-      .select('student_id,cnt_extra')
-      .ilike('class_id', cid)
-      .eq('title_id', r.title_id)
-      .gt('cnt_extra', 0)
-      .order('student_id', { ascending: true });
+      if (error) throw error;
 
-    if (error) throw error;
-
-    setExtraRows((data ?? []) as any);
-  } catch (e: any) {
-    setExtraErr(e?.message ?? 'Fehler beim Laden der Extra-Schüler.');
-    setExtraRows([]);
-  } finally {
-    setExtraLoading(false);
+      setProblemRows((data ?? []) as any);
+    } catch (e: any) {
+      setProblemErr(e?.message ?? 'Fehler beim Laden der Problem-Schüler.');
+      setProblemRows([]);
+    } finally {
+      setProblemLoading(false);
+    }
   }
-}
 
-function closeExtra() {
-  setExtraOpen(false);
-  setExtraTitle(null);
-  setExtraRows([]);
-  setExtraErr(null);
-}
-// ===== /NEU =====
+  function closeProblem() {
+    setProblemOpen(false);
+    setProblemTitle(null);
+    setProblemRows([]);
+    setProblemErr(null);
+  }
+  // ===== /Probleme =====
 
   useEffect(() => {
     (async () => {
@@ -746,22 +752,26 @@ function closeExtra() {
           </button>
         </div>
 
-        {msg && (
+        {msg ? (
           <>
             <hr className="sep" />
-            <div className="small" style={{ color: 'rgba(255,93,108,.95)' }}>{msg}</div>
+            <div className="small" style={{ color: 'rgba(255,93,108,.95)' }}>
+              {msg}
+            </div>
           </>
-        )}
+        ) : null}
 
-        {ok && (
+        {ok ? (
           <>
             <hr className="sep" />
-            <div className="small" style={{ color: 'rgba(46,229,157,.95)', fontWeight: 800 }}>{ok}</div>
+            <div className="small" style={{ color: 'rgba(46,229,157,.95)', fontWeight: 800 }}>
+              {ok}
+            </div>
           </>
-        )}
+        ) : null}
       </div>
 
-      {/* ===== Übersicht pro Titel (Schüler/Lehrer/Lager) ===== */}
+      {/* ===== Übersicht pro Titel ===== */}
       <div className="card" style={{ marginTop: 14 }}>
         <div className="row">
           <div className="badge">Übersicht je Titel: Schüler / Lehrer / Lager</div>
@@ -803,7 +813,9 @@ function closeExtra() {
         <hr className="sep" />
 
         {filteredSummary.length === 0 ? (
-          <div className="small" style={{ opacity: 0.85 }}>Keine Daten (oder Filter zu eng).</div>
+          <div className="small" style={{ opacity: 0.85 }}>
+            Keine Daten (oder Filter zu eng).
+          </div>
         ) : (
           <div style={{ overflowX: 'auto' }}>
             <table className="table" style={{ width: '100%', borderCollapse: 'collapse' }}>
@@ -825,7 +837,9 @@ function closeExtra() {
                     <td style={{ padding: 8, opacity: 0.9 }}>{r.subject ?? '-'}</td>
                     <td style={{ padding: 8 }}>
                       <div style={{ fontWeight: 800 }}>{r.title_name ?? r.title_id}</div>
-                      <div className="small" style={{ opacity: 0.75 }}>{r.title_id}</div>
+                      <div className="small" style={{ opacity: 0.75 }}>
+                        {r.title_id}
+                      </div>
                     </td>
                     <td style={{ padding: 8, opacity: 0.9 }}>{r.isbn ?? '-'}</td>
                     <td style={{ padding: 8, opacity: 0.9 }}>{euro(r.price_eur)}</td>
@@ -882,8 +896,12 @@ function closeExtra() {
           <div className="badge">Titel: {filteredCheckRows.length}</div>
           <div className="badge">Soll: {checkTotals.should}</div>
           <div className="badge">Ist: {checkTotals.isv}</div>
-          <div className="badge" style={{ borderColor: 'rgba(255,93,108,.6)' }}>Fehlt: {checkTotals.miss}</div>
-          <div className="badge" style={{ borderColor: 'rgba(255,188,66,.6)' }}>Zu viel: {checkTotals.extra}</div>
+          <div className="badge" style={{ borderColor: 'rgba(255,93,108,.6)' }}>
+            Fehlt: {checkTotals.miss}
+          </div>
+          <div className="badge" style={{ borderColor: 'rgba(255,188,66,.6)' }}>
+            Zu viel: {checkTotals.extra}
+          </div>
         </div>
 
         {checkErr ? (
@@ -900,7 +918,9 @@ function closeExtra() {
         <hr className="sep" />
 
         {filteredCheckRows.length === 0 ? (
-          <div className="small" style={{ opacity: 0.85 }}>Keine Daten (oder Filter zu eng). Tipp: Klasse eingeben und „Abgleich laden“.</div>
+          <div className="small" style={{ opacity: 0.85 }}>
+            Keine Daten (oder Filter zu eng). Tipp: Klasse eingeben und „Abgleich laden“.
+          </div>
         ) : (
           <div style={{ overflowX: 'auto' }}>
             <table className="table" style={{ width: '100%', borderCollapse: 'collapse' }}>
@@ -928,7 +948,9 @@ function closeExtra() {
                       <td style={{ padding: 8, opacity: 0.9 }}>{r.subject ?? '-'}</td>
                       <td style={{ padding: 8 }}>
                         <div style={{ fontWeight: 800 }}>{r.title_name ?? r.title_id}</div>
-                        <div className="small" style={{ opacity: 0.75 }}>{r.title_id}</div>
+                        <div className="small" style={{ opacity: 0.75 }}>
+                          {r.title_id}
+                        </div>
                       </td>
                       <td style={{ padding: 8, opacity: 0.9 }}>{r.isbn ?? '-'}</td>
                       <td style={{ padding: 8, opacity: 0.9 }}>{euro(r.price_eur)}</td>
@@ -954,8 +976,6 @@ function closeExtra() {
                       >
                         {extra}
                       </td>
-
-                      {/* ✅ Repariert: Aktion-Logik inkl. „Wer hat zu viel?“ */}
                       <td style={{ padding: 8 }}>
                         {okRow ? (
                           <span className="badge">OK</span>
@@ -968,13 +988,15 @@ function closeExtra() {
                               Wer fehlt?
                             </button>
                           </div>
-                        ) : (
+                        ) : extra > 0 ? (
                           <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
                             <span className="badge">Prüfen</span>
-                            <button className="btn secondary" style={{ padding: '6px 10px' }} onClick={() => loadExtraStudentsForTitle(r)}>
+                            <button className="btn secondary" style={{ padding: '6px 10px' }} onClick={() => loadProblemStudentsForTitle(r)}>
                               Wer hat zu viel?
                             </button>
                           </div>
+                        ) : (
+                          <span className="badge">Prüfen</span>
                         )}
                       </td>
                     </tr>
@@ -985,7 +1007,7 @@ function closeExtra() {
           </div>
         )}
 
-        {/* ===== Zuweisungsfeld (Buchcode → Schüler) ===== */}
+        {/* ===== Zuweisungsfeld ===== */}
         {assignOpen && assignTitle ? (
           <>
             <hr className="sep" />
@@ -1030,9 +1052,8 @@ function closeExtra() {
             ) : null}
           </>
         ) : null}
-        {/* ===== /Zuweisungsfeld ===== */}
 
-        {/* ===== Fehlende Schüler anzeigen (Wer fehlt?) ===== */}
+        {/* ===== Fehlende Schüler ===== */}
         {missingOpen && missingTitle ? (
           <>
             <hr className="sep" />
@@ -1048,7 +1069,9 @@ function closeExtra() {
             </div>
 
             {missingLoading ? (
-              <div className="small" style={{ marginTop: 10 }}>Lade…</div>
+              <div className="small" style={{ marginTop: 10 }}>
+                Lade…
+              </div>
             ) : missingErr ? (
               <div className="small" style={{ marginTop: 10, color: 'rgba(255,93,108,.95)', whiteSpace: 'pre-wrap' }}>
                 {missingErr}
@@ -1078,46 +1101,79 @@ function closeExtra() {
             )}
           </>
         ) : null}
-        {/* ===== /Wer fehlt ===== */}
 
-        {/* ===== NEU: Extra-Schüler anzeigen (Wer hat zu viel?) ===== */}
-        {extraOpen && extraTitle ? (
+        {/* ===== Problem-Schüler (zu viel / verboten / doppelt) ===== */}
+        {problemOpen && problemTitle ? (
           <>
             <hr className="sep" />
             <div className="row">
               <div className="badge">
-                Zu viel bei Schülern: {extraTitle.subject ?? ''} · {extraTitle.title_name ?? extraTitle.title_id} ({extraTitle.title_id}) · Klasse{' '}
+                Probleme bei Schülern: {problemTitle.subject ?? ''} · {problemTitle.title_name ?? problemTitle.title_id} ({problemTitle.title_id}) · Klasse{' '}
                 {checkClassId.trim()}
               </div>
               <div className="spacer" />
-              <button className="btn secondary" onClick={closeExtra} disabled={extraLoading}>
+              <button className="btn secondary" onClick={closeProblem} disabled={problemLoading}>
                 Schließen
               </button>
             </div>
 
-            {extraLoading ? (
-              <div className="small" style={{ marginTop: 10 }}>Lade…</div>
-            ) : extraErr ? (
+            {problemLoading ? (
+              <div className="small" style={{ marginTop: 10 }}>
+                Lade…
+              </div>
+            ) : problemErr ? (
               <div className="small" style={{ marginTop: 10, color: 'rgba(255,93,108,.95)', whiteSpace: 'pre-wrap' }}>
-                {extraErr}
+                {problemErr}
+                {'\n\n'}
+                Hinweis: Prüfe, ob die View <b>sb_book_problem_students</b> existiert und lesbar ist.
               </div>
             ) : (
               <div className="small" style={{ marginTop: 10, lineHeight: 1.8 }}>
-                {extraRows.length === 0 ? (
-                  <div>Keine Schüler mit „zu viel“ gefunden.</div>
+                {problemRows.length === 0 ? (
+                  <div>Keine Problem-Schüler gefunden.</div>
                 ) : (
                   <>
                     <div style={{ marginBottom: 8, opacity: 0.85 }}>
-                      Anzahl: <b>{extraRows.length}</b>
+                      Anzahl: <b>{problemRows.length}</b>
                     </div>
 
-                    <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap' }}>
-                      {extraRows.map((m) => (
-                        <span key={m.student_id} className="badge">
-                          {m.student_id}
-                          {m.cnt_extra != null ? ` (+${m.cnt_extra})` : ''}
-                        </span>
-                      ))}
+                    <div style={{ overflowX: 'auto' }}>
+                      <table className="table" style={{ width: '100%', borderCollapse: 'collapse' }}>
+                        <thead>
+                          <tr>
+                            <th style={{ textAlign: 'left', padding: 8 }}>Schüler</th>
+                            <th style={{ textAlign: 'right', padding: 8 }}>Ist</th>
+                            <th style={{ textAlign: 'right', padding: 8 }}>Soll</th>
+                            <th style={{ textAlign: 'right', padding: 8 }}>Extra</th>
+                            <th style={{ textAlign: 'right', padding: 8 }}>Doppelt</th>
+                            <th style={{ textAlign: 'left', padding: 8 }}>Grund</th>
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {problemRows.map((p) => {
+                            const forbidden = !!p.forbidden_hold;
+                            const dup = Number(p.cnt_duplicate ?? 0);
+                            const extraN = Number(p.cnt_extra ?? 0);
+
+                            return (
+                              <tr key={p.student_id} style={{ borderTop: '1px solid rgba(255,255,255,0.10)' }}>
+                                <td style={{ padding: 8, fontWeight: 800 }}>{p.student_id}</td>
+                                <td style={{ padding: 8, textAlign: 'right' }}>{Number(p.cnt_is ?? 0)}</td>
+                                <td style={{ padding: 8, textAlign: 'right' }}>{Number(p.cnt_should ?? 0)}</td>
+                                <td style={{ padding: 8, textAlign: 'right', fontWeight: 800 }}>{extraN}</td>
+                                <td style={{ padding: 8, textAlign: 'right', fontWeight: 800 }}>{dup}</td>
+                                <td style={{ padding: 8 }}>
+                                  <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+                                    {forbidden ? <span className="badge" style={{ borderColor: 'rgba(255,93,108,.6)' }}>Darf nicht haben</span> : null}
+                                    {dup > 0 ? <span className="badge" style={{ borderColor: 'rgba(255,188,66,.6)' }}>Doppelt</span> : null}
+                                    {!forbidden && dup === 0 && extraN > 0 ? <span className="badge">Extra</span> : null}
+                                  </div>
+                                </td>
+                              </tr>
+                            );
+                          })}
+                        </tbody>
+                      </table>
                     </div>
                   </>
                 )}
@@ -1125,7 +1181,6 @@ function closeExtra() {
             )}
           </>
         ) : null}
-        {/* ===== /NEU ===== */}
 
         <div style={{ height: 6 }} />
         <div className="small" style={{ opacity: 0.75 }}>
@@ -1146,7 +1201,13 @@ function closeExtra() {
         <div style={{ height: 10 }} />
 
         <div className="row" style={{ flexWrap: 'wrap', gap: 10 }}>
-          <input className="input" value={checkStudentId} onChange={(e) => setCheckStudentId(e.target.value)} placeholder="Schülercode (z.B. S0001)" style={{ maxWidth: 200 }} />
+          <input
+            className="input"
+            value={checkStudentId}
+            onChange={(e) => setCheckStudentId(e.target.value)}
+            placeholder="Schülercode (z.B. S0001)"
+            style={{ maxWidth: 200 }}
+          />
           <button className="btn ok" onClick={loadStudentCheck} disabled={studentLoading}>
             Abgleich laden
           </button>
@@ -1167,8 +1228,12 @@ function closeExtra() {
           <div className="badge">Titel: {filteredStudentRows.length}</div>
           <div className="badge">Soll: {studentTotals.should}</div>
           <div className="badge">Ist: {studentTotals.isv}</div>
-          <div className="badge" style={{ borderColor: 'rgba(255,93,108,.6)' }}>Fehlt: {studentTotals.miss}</div>
-          <div className="badge" style={{ borderColor: 'rgba(255,188,66,.6)' }}>Zu viel: {studentTotals.extra}</div>
+          <div className="badge" style={{ borderColor: 'rgba(255,93,108,.6)' }}>
+            Fehlt: {studentTotals.miss}
+          </div>
+          <div className="badge" style={{ borderColor: 'rgba(255,188,66,.6)' }}>
+            Zu viel: {studentTotals.extra}
+          </div>
         </div>
 
         {studentErr ? (
@@ -1185,7 +1250,9 @@ function closeExtra() {
         <hr className="sep" />
 
         {filteredStudentRows.length === 0 ? (
-          <div className="small" style={{ opacity: 0.85 }}>Keine Daten (oder Filter zu eng). Tipp: Schülercode eingeben und „Abgleich laden“.</div>
+          <div className="small" style={{ opacity: 0.85 }}>
+            Keine Daten (oder Filter zu eng). Tipp: Schülercode eingeben und „Abgleich laden“.
+          </div>
         ) : (
           <div style={{ overflowX: 'auto' }}>
             <table className="table" style={{ width: '100%', borderCollapse: 'collapse' }}>
@@ -1213,7 +1280,9 @@ function closeExtra() {
                       <td style={{ padding: 8, opacity: 0.9 }}>{r.subject ?? '-'}</td>
                       <td style={{ padding: 8 }}>
                         <div style={{ fontWeight: 800 }}>{r.title_name ?? r.title_id}</div>
-                        <div className="small" style={{ opacity: 0.75 }}>{r.title_id}</div>
+                        <div className="small" style={{ opacity: 0.75 }}>
+                          {r.title_id}
+                        </div>
                       </td>
                       <td style={{ padding: 8, opacity: 0.9 }}>{r.isbn ?? '-'}</td>
                       <td style={{ padding: 8, opacity: 0.9 }}>{euro(r.price_eur)}</td>
@@ -1249,7 +1318,6 @@ function closeExtra() {
           Quelle: View <b>sb_student_required_check</b>
         </div>
       </div>
-      {/* ===== /Soll–Ist pro Schüler ===== */}
     </div>
   );
 }
