@@ -48,6 +48,19 @@ type MissingStudentRow = {
   price_eur: number | null;
 };
 
+// ===== NEU: Problem-Schüler (dürfte nicht haben / doppelt / zu viel) =====
+type ProblemStudentRow = {
+  class_id: string;
+  title_id: string;
+  student_id: string;
+  cnt_is: number | null;
+  cnt_should: number | null;
+  cnt_extra: number | null;
+  cnt_duplicate: number | null;
+  forbidden_hold: boolean | null;
+};
+// ===== /NEU =====
+
 function euro(n: number | null | undefined) {
   if (n == null || Number.isNaN(n)) return '-';
   return Number(n).toFixed(2).replace('.', ',') + ' €';
@@ -227,6 +240,52 @@ export default function TeacherPage() {
   }
   // ===== /Wer fehlt =====
 
+  // ===== NEU: „Probleme anzeigen“ (dürfte nicht haben / doppelt / zu viel) =====
+  const [problemOpen, setProblemOpen] = useState(false);
+  const [problemTitle, setProblemTitle] = useState<{ title_id: string; title_name?: string | null; subject?: string | null } | null>(null);
+  const [problemRows, setProblemRows] = useState<ProblemStudentRow[]>([]);
+  const [problemLoading, setProblemLoading] = useState(false);
+  const [problemErr, setProblemErr] = useState<string | null>(null);
+
+  async function loadProblemStudentsForTitle(r: ClassRequiredRow) {
+    setProblemErr(null);
+    setProblemLoading(true);
+    setProblemOpen(true);
+    setProblemTitle({ title_id: r.title_id, title_name: r.title_name, subject: r.subject });
+    setProblemRows([]);
+
+    try {
+      const cid = checkClassId.trim();
+      if (!cid) throw new Error('Klasse fehlt.');
+      if (!r?.title_id) throw new Error('Titel fehlt.');
+
+      const { data, error } = await supabase
+        .from('sb_book_problem_students')
+        .select('class_id,title_id,student_id,cnt_is,cnt_should,cnt_extra,cnt_duplicate,forbidden_hold')
+        .ilike('class_id', cid)
+        .eq('title_id', r.title_id)
+        // nur echte Probleme:
+        .or('forbidden_hold.is.true,cnt_duplicate.gt.0,cnt_extra.gt.0')
+        .order('student_id', { ascending: true });
+
+      if (error) throw error;
+      setProblemRows((data ?? []) as any);
+    } catch (e: any) {
+      setProblemErr(e?.message ?? 'Fehler beim Laden der Problem-Schüler.');
+      setProblemRows([]);
+    } finally {
+      setProblemLoading(false);
+    }
+  }
+
+  function closeProblem() {
+    setProblemOpen(false);
+    setProblemTitle(null);
+    setProblemRows([]);
+    setProblemErr(null);
+  }
+  // ===== /Probleme =====
+
   useEffect(() => {
     (async () => {
       setMsg(null);
@@ -247,7 +306,6 @@ export default function TeacherPage() {
         return (window.location.href = '/login');
       }
 
-      // teacher_id holen (RPC existiert bei dir: sb_my_teacher_id)
       const tidRes = await supabase.rpc('sb_my_teacher_id');
       if (tidRes.error) {
         setMsg(`Teacher-ID konnte nicht geladen werden: ${tidRes.error.message}`);
@@ -436,12 +494,23 @@ export default function TeacherPage() {
                       <td style={{ padding: 8 }}>
                         {okRow ? (
                           <span className="badge">OK</span>
-                        ) : missing > 0 ? (
-                          <button className="btn secondary" style={{ padding: '6px 10px' }} onClick={() => loadMissingStudentsForTitle(r)}>
-                            Wer fehlt?
-                          </button>
                         ) : (
-                          <span className="badge">Prüfen</span>
+                          <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+                            {missing > 0 ? (
+                              <button className="btn secondary" style={{ padding: '6px 10px' }} onClick={() => loadMissingStudentsForTitle(r)}>
+                                Wer fehlt?
+                              </button>
+                            ) : null}
+
+                            {extra > 0 ? (
+                              <button className="btn secondary" style={{ padding: '6px 10px' }} onClick={() => loadProblemStudentsForTitle(r)}>
+                                Probleme anzeigen
+                              </button>
+                            ) : null}
+
+                            {/* falls nur „Prüfen“ gewünscht */}
+                            {missing === 0 && extra === 0 ? <span className="badge">OK</span> : null}
+                          </div>
                         )}
                       </td>
                     </tr>
@@ -495,6 +564,87 @@ export default function TeacherPage() {
           </>
         ) : null}
         {/* ===== /Wer fehlt ===== */}
+
+        {/* ===== NEU: Problem-Schüler anzeigen ===== */}
+        {problemOpen && problemTitle ? (
+          <>
+            <hr className="sep" />
+            <div className="row">
+              <div className="badge">
+                Probleme bei Schülern: {problemTitle.subject ?? ''} · {problemTitle.title_name ?? problemTitle.title_id} ({problemTitle.title_id}) · Klasse {checkClassId.trim()}
+              </div>
+              <div className="spacer" />
+              <button className="btn secondary" onClick={closeProblem} disabled={problemLoading}>
+                Schließen
+              </button>
+            </div>
+
+            {problemLoading ? (
+              <div className="small" style={{ marginTop: 10 }}>Lade…</div>
+            ) : problemErr ? (
+              <div className="small" style={{ marginTop: 10, color: 'rgba(255,93,108,.95)', whiteSpace: 'pre-wrap' }}>
+                {problemErr}
+                {'\n\n'}
+                Hinweis: Prüfe, ob die View <b>sb_book_problem_students</b> existiert und lesbar ist (SELECT-Rechte!).
+              </div>
+            ) : (
+              <div style={{ marginTop: 10 }}>
+                {problemRows.length === 0 ? (
+                  <div className="small">Keine Problem-Schüler gefunden.</div>
+                ) : (
+                  <div style={{ overflowX: 'auto' }}>
+                    <table className="table" style={{ width: '100%', borderCollapse: 'collapse' }}>
+                      <thead>
+                        <tr>
+                          <th style={{ textAlign: 'left', padding: 8 }}>Schüler</th>
+                          <th style={{ textAlign: 'right', padding: 8 }}>Ist</th>
+                          <th style={{ textAlign: 'right', padding: 8 }}>Soll</th>
+                          <th style={{ textAlign: 'right', padding: 8 }}>Zu viel</th>
+                          <th style={{ textAlign: 'right', padding: 8 }}>Doppelt</th>
+                          <th style={{ textAlign: 'left', padding: 8 }}>Grund</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {problemRows.map((p) => {
+                          const forbidden = Boolean(p.forbidden_hold);
+                          const dup = Number(p.cnt_duplicate ?? 0);
+                          const extra = Number(p.cnt_extra ?? 0);
+
+                          const reasons: string[] = [];
+                          if (forbidden) reasons.push('dürfte nicht haben');
+                          if (dup > 0) reasons.push(`doppelt (+${dup})`);
+                          if (!forbidden && extra > 0) reasons.push(`zu viel (+${extra})`);
+
+                          return (
+                            <tr key={p.student_id} style={{ borderTop: '1px solid rgba(255,255,255,0.10)' }}>
+                              <td style={{ padding: 8, fontWeight: 800 }}>{p.student_id}</td>
+                              <td style={{ padding: 8, textAlign: 'right' }}>{Number(p.cnt_is ?? 0)}</td>
+                              <td style={{ padding: 8, textAlign: 'right' }}>{Number(p.cnt_should ?? 0)}</td>
+                              <td style={{ padding: 8, textAlign: 'right', fontWeight: 800, color: extra > 0 ? 'rgba(255,188,66,.95)' : 'rgba(255,255,255,0.85)' }}>
+                                {extra}
+                              </td>
+                              <td style={{ padding: 8, textAlign: 'right', fontWeight: 800, color: dup > 0 ? 'rgba(255,188,66,.95)' : 'rgba(255,255,255,0.85)' }}>
+                                {dup}
+                              </td>
+                              <td style={{ padding: 8, opacity: 0.95 }}>
+                                {reasons.length ? reasons.join(' · ') : '—'}
+                              </td>
+                            </tr>
+                          );
+                        })}
+                      </tbody>
+                    </table>
+
+                    <div className="small" style={{ marginTop: 8, opacity: 0.75 }}>
+                      Quelle: View <b>sb_book_problem_students</b>
+                    </div>
+                  </div>
+                )}
+              </div>
+            )}
+          </>
+        ) : null}
+        {/* ===== /Problem-Schüler ===== */}
 
         <div style={{ height: 6 }} />
         <div className="small" style={{ opacity: 0.75 }}>
@@ -580,7 +730,6 @@ export default function TeacherPage() {
                 {filteredStudentRows.map((r, idx) => {
                   const missing = Number(r.cnt_missing ?? 0);
                   const extra = Number(r.cnt_extra ?? 0);
-                  const okRow = missing === 0 && extra === 0;
 
                   return (
                     <tr key={`${r.student_id}_${r.title_id}_${idx}`} style={{ borderTop: '1px solid rgba(255,255,255,0.10)' }}>
