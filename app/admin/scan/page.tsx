@@ -25,6 +25,9 @@ export default function AdminScanPage() {
       const role = await fetchRole();
       if (role !== 'admin') return (window.location.href = '/teacher');
       setReady(true);
+
+      // Fokus direkt ins Buchfeld (optional)
+      setTimeout(() => bookRef.current?.focus(), 50);
     })();
   }, []);
 
@@ -35,10 +38,13 @@ export default function AdminScanPage() {
     const id = holderId.trim();
     const code = bookCode.trim();
 
-    if (!id) return setMsg('Bitte zuerst Schüler- oder Lehrer-ID eingeben.');
+    if (!id) return setMsg(mode === 'student' ? 'Bitte zuerst Schüler-ID eingeben.' : 'Bitte zuerst Lehrer-ID eingeben.');
     if (!code) return setMsg('Bitte Buchcode eingeben.');
 
     try {
+      // Hinweis: Die RPC heißt bei dir sb_scan_book_admin_84825.
+      // Sie setzt aktuell "student" als holder_type. Wenn du Lehrer wirklich als holder_type schreiben willst,
+      // muss die Funktion entsprechend mode unterscheiden (können wir als nächsten Schritt machen).
       const { data, error } = await supabase.rpc('sb_scan_book_admin_84825', {
         p_new_student_id: id,
         p_condition: condition,
@@ -86,6 +92,12 @@ export default function AdminScanPage() {
         <div className="row">
           <div className="badge">Bücher scannen</div>
           <div className="spacer" />
+
+          {/* NEU: Zurück zum Dashboard */}
+          <button className="btn secondary" onClick={() => (window.location.href = '/admin')}>
+            Zurück zum Dashboard
+          </button>
+
           <button className="btn secondary" onClick={undoLast}>
             Letzte Aktion rückgängig
           </button>
@@ -94,12 +106,7 @@ export default function AdminScanPage() {
         <div style={{ height: 15 }} />
 
         <div className="row">
-          <select
-            className="select"
-            value={mode}
-            onChange={(e) => setMode(e.target.value as any)}
-            style={{ maxWidth: 200 }}
-          >
+          <select className="select" value={mode} onChange={(e) => setMode(e.target.value as any)} style={{ maxWidth: 200 }}>
             <option value="student">Schüler</option>
             <option value="teacher">Lehrer</option>
           </select>
@@ -109,6 +116,9 @@ export default function AdminScanPage() {
             value={holderId}
             onChange={(e) => setHolderId(e.target.value)}
             placeholder={mode === 'student' ? 'Schüler-ID scannen' : 'Lehrer-ID scannen'}
+            onKeyDown={(e) => {
+              if (e.key === 'Enter') setTimeout(() => bookRef.current?.focus(), 50);
+            }}
           />
         </div>
 
@@ -130,23 +140,13 @@ export default function AdminScanPage() {
         <div style={{ height: 10 }} />
 
         <div className="row">
-          <select
-            className="select"
-            value={condition}
-            onChange={(e) => setCondition(e.target.value as any)}
-            style={{ maxWidth: 200 }}
-          >
+          <select className="select" value={condition} onChange={(e) => setCondition(e.target.value as any)} style={{ maxWidth: 200 }}>
             <option value="ok">Zustand: ok</option>
             <option value="used">Zustand: benutzt</option>
             <option value="damaged">Zustand: kaputt</option>
           </select>
 
-          <input
-            className="input"
-            value={note}
-            onChange={(e) => setNote(e.target.value)}
-            placeholder="Notiz (optional)"
-          />
+          <input className="input" value={note} onChange={(e) => setNote(e.target.value)} placeholder="Notiz (optional)" />
 
           <button className="btn ok" onClick={assign}>
             Zuweisen
