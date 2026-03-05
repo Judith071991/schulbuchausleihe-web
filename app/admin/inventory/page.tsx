@@ -500,10 +500,7 @@ export default function AdminInventoryPage() {
       if (error) throw error;
 
       setOk(`Buch ${code} → Lager.`);
-  await loadStudentBookCodesForTitle({
-  student_id: student_id,
-  title_id: title_id
-});
+await loadStudentCheck();
 
       // Cache für diese Zeile invalidieren
       const key = `${student_id}__${title_id}`;
