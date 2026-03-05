@@ -82,6 +82,14 @@ type BookProblemRow = {
 };
 // ===== /Probleme =====
 
+// ===== NEU: freie Buchcodes (View sb_free_book_codes) =====
+type FreeCodeRow = {
+  book_code: string;
+  disposed_at: string | null;
+  disposed_note: string | null;
+};
+// ===== /NEU =====
+
 function euro(n: number | null | undefined) {
   if (n == null || Number.isNaN(n)) return '-';
   return Number(n).toFixed(2).replace('.', ',') + ' €';
@@ -608,6 +616,39 @@ export default function AdminInventoryPage() {
   }
   // ===== /Probleme =====
 
+  // ===== NEU: Freie Buchcodes laden + anzeigen =====
+  const [freeCodes, setFreeCodes] = useState<FreeCodeRow[]>([]);
+  const [freeLoading, setFreeLoading] = useState(false);
+  const [freeErr, setFreeErr] = useState<string | null>(null);
+  const [freeQuery, setFreeQuery] = useState('');
+
+  async function loadFreeCodes() {
+    setFreeErr(null);
+    setFreeLoading(true);
+    try {
+      const { data, error } = await supabase
+        .from('sb_free_book_codes')
+        .select('book_code,disposed_at,disposed_note')
+        .order('disposed_at', { ascending: false })
+        .limit(500);
+
+      if (error) throw error;
+      setFreeCodes((data ?? []) as any);
+    } catch (e: any) {
+      setFreeErr(e?.message ?? 'Fehler beim Laden der freien Buchcodes.');
+      setFreeCodes([]);
+    } finally {
+      setFreeLoading(false);
+    }
+  }
+
+  const filteredFreeCodes = useMemo(() => {
+    const q = freeQuery.trim().toLowerCase();
+    if (!q) return freeCodes;
+    return freeCodes.filter((r) => String(r.book_code).toLowerCase().includes(q));
+  }, [freeCodes, freeQuery]);
+  // ===== /NEU =====
+
   useEffect(() => {
     (async () => {
       const { data } = await supabase.auth.getSession();
@@ -618,6 +659,7 @@ export default function AdminInventoryPage() {
 
       loadSummary();
       autoFillFromTitle(titleId);
+      loadFreeCodes(); // ✅ NEU
     })();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
@@ -847,6 +889,75 @@ export default function AdminInventoryPage() {
           </>
         ) : null}
       </div>
+
+      {/* ===== NEU: Freie Buchcodes (wiederverwendbar) ===== */}
+      <div className="card" style={{ marginTop: 14 }}>
+        <div className="row">
+          <div className="badge">Freie Buchcodes (wiederverwendbar)</div>
+          <div className="spacer" />
+          <button className="btn secondary" onClick={loadFreeCodes} disabled={freeLoading}>
+            {freeLoading ? 'Lade…' : 'Aktualisieren'}
+          </button>
+        </div>
+
+        <div style={{ height: 10 }} />
+
+        <div className="row" style={{ flexWrap: 'wrap', gap: 10 }}>
+          <input
+            className="input"
+            value={freeQuery}
+            onChange={(e) => setFreeQuery(e.target.value)}
+            placeholder="Suche Buchcode…"
+            style={{ maxWidth: 260 }}
+          />
+
+          <div className="badge">Anzahl: {filteredFreeCodes.length}</div>
+
+          <button
+            className="btn secondary"
+            onClick={() => {
+              const s = filteredFreeCodes.map((x) => x.book_code).join(',');
+              navigator.clipboard.writeText(s);
+            }}
+            disabled={filteredFreeCodes.length === 0}
+          >
+            Liste kopieren
+          </button>
+        </div>
+
+        {freeErr ? (
+          <>
+            <hr className="sep" />
+            <div className="small" style={{ color: 'rgba(255,93,108,.95)', whiteSpace: 'pre-wrap' }}>
+              {freeErr}
+              {'\n\n'}
+              Hinweis: Prüfe, ob die View <b>sb_free_book_codes</b> existiert und für <b>authenticated</b> lesbar ist (GRANT SELECT / RLS).
+            </div>
+          </>
+        ) : null}
+
+        <hr className="sep" />
+
+        {freeLoading ? (
+          <div className="small">Lade…</div>
+        ) : filteredFreeCodes.length === 0 ? (
+          <div className="small" style={{ opacity: 0.85 }}>Keine freien Codes gefunden.</div>
+        ) : (
+          <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap', lineHeight: 2 }}>
+            {filteredFreeCodes.map((x) => (
+              <span key={x.book_code} className="badge">
+                {x.book_code}
+              </span>
+            ))}
+          </div>
+        )}
+
+        <div style={{ height: 6 }} />
+        <div className="small" style={{ opacity: 0.75 }}>
+          Quelle: View <b>sb_free_book_codes</b>
+        </div>
+      </div>
+      {/* ===== /NEU ===== */}
 
       {/* ===== Übersicht pro Titel ===== */}
       <div className="card" style={{ marginTop: 14 }}>
@@ -1094,20 +1205,8 @@ export default function AdminInventoryPage() {
             <div style={{ height: 10 }} />
 
             <div className="row" style={{ flexWrap: 'wrap', gap: 10 }}>
-              <input
-                className="input"
-                value={assignBookCode}
-                onChange={(e) => setAssignBookCode(e.target.value)}
-                placeholder="Buchcode scannen/eingeben"
-                style={{ maxWidth: 320 }}
-              />
-              <input
-                className="input"
-                value={assignStudentId}
-                onChange={(e) => setAssignStudentId(e.target.value)}
-                placeholder="optional: Schüler-ID (leer = automatisch)"
-                style={{ maxWidth: 320 }}
-              />
+              <input className="input" value={assignBookCode} onChange={(e) => setAssignBookCode(e.target.value)} placeholder="Buchcode scannen/eingeben" style={{ maxWidth: 320 }} />
+              <input className="input" value={assignStudentId} onChange={(e) => setAssignStudentId(e.target.value)} placeholder="optional: Schüler-ID (leer = automatisch)" style={{ maxWidth: 320 }} />
               <button className="btn ok" onClick={assignNow} disabled={assignBusy}>
                 {assignBusy ? 'Zuweisen…' : 'Zuweisen'}
               </button>
@@ -1136,8 +1235,7 @@ export default function AdminInventoryPage() {
             <hr className="sep" />
             <div className="row">
               <div className="badge">
-                Fehlt bei Schülern: {missingTitle.subject ?? ''} · {missingTitle.title_name ?? missingTitle.title_id} ({missingTitle.title_id}) · Klasse{' '}
-                {checkClassId.trim()}
+                Fehlt bei Schülern: {missingTitle.subject ?? ''} · {missingTitle.title_name ?? missingTitle.title_id} ({missingTitle.title_id}) · Klasse {checkClassId.trim()}
               </div>
               <div className="spacer" />
               <button className="btn secondary" onClick={closeMissing} disabled={missingLoading}>
@@ -1185,8 +1283,7 @@ export default function AdminInventoryPage() {
             <hr className="sep" />
             <div className="row">
               <div className="badge">
-                Probleme bei Schülern: {problemTitle.subject ?? ''} · {problemTitle.title_name ?? problemTitle.title_id} ({problemTitle.title_id}) · Klasse{' '}
-                {checkClassId.trim()}
+                Probleme bei Schülern: {problemTitle.subject ?? ''} · {problemTitle.title_name ?? problemTitle.title_id} ({problemTitle.title_id}) · Klasse {checkClassId.trim()}
               </div>
               <div className="spacer" />
               <button className="btn secondary" onClick={closeProblem} disabled={problemLoading}>
@@ -1278,13 +1375,7 @@ export default function AdminInventoryPage() {
         <div style={{ height: 10 }} />
 
         <div className="row" style={{ flexWrap: 'wrap', gap: 10 }}>
-          <input
-            className="input"
-            value={checkStudentId}
-            onChange={(e) => setCheckStudentId(e.target.value)}
-            placeholder="Schülercode (z.B. S0001)"
-            style={{ maxWidth: 200 }}
-          />
+          <input className="input" value={checkStudentId} onChange={(e) => setCheckStudentId(e.target.value)} placeholder="Schülercode (z.B. S0001)" style={{ maxWidth: 200 }} />
           <button className="btn ok" onClick={loadStudentCheck} disabled={studentLoading}>
             Abgleich laden
           </button>
@@ -1293,13 +1384,7 @@ export default function AdminInventoryPage() {
             Klasse: <b>{studentClassId || '-'}</b>
           </div>
 
-          <input
-            className="input"
-            value={studentQuery}
-            onChange={(e) => setStudentQuery(e.target.value)}
-            placeholder="Suchen nach Fach / Titel / ISBN / title_id…"
-            style={{ maxWidth: 420 }}
-          />
+          <input className="input" value={studentQuery} onChange={(e) => setStudentQuery(e.target.value)} placeholder="Suchen nach Fach / Titel / ISBN / title_id…" style={{ maxWidth: 420 }} />
 
           <div className="spacer" />
           <div className="badge">Titel: {filteredStudentRows.length}</div>
@@ -1368,24 +1453,10 @@ export default function AdminInventoryPage() {
                         <td style={{ padding: 8, opacity: 0.9 }}>{euro(r.price_eur)}</td>
                         <td style={{ padding: 8, textAlign: 'right' }}>{Number(r.cnt_should ?? 0)}</td>
                         <td style={{ padding: 8, textAlign: 'right' }}>{Number(r.cnt_is ?? 0)}</td>
-                        <td
-                          style={{
-                            padding: 8,
-                            textAlign: 'right',
-                            fontWeight: 800,
-                            color: missing > 0 ? 'rgba(255,93,108,.95)' : 'rgba(255,255,255,0.85)',
-                          }}
-                        >
+                        <td style={{ padding: 8, textAlign: 'right', fontWeight: 800, color: missing > 0 ? 'rgba(255,93,108,.95)' : 'rgba(255,255,255,0.85)' }}>
                           {missing}
                         </td>
-                        <td
-                          style={{
-                            padding: 8,
-                            textAlign: 'right',
-                            fontWeight: 800,
-                            color: extra > 0 ? 'rgba(255,188,66,.95)' : 'rgba(255,255,255,0.85)',
-                          }}
-                        >
+                        <td style={{ padding: 8, textAlign: 'right', fontWeight: 800, color: extra > 0 ? 'rgba(255,188,66,.95)' : 'rgba(255,255,255,0.85)' }}>
                           {extra}
                         </td>
 
@@ -1424,12 +1495,7 @@ export default function AdminInventoryPage() {
                                 {(codeRows[key] ?? []).map((c) => (
                                   <span key={c} className="badge" style={{ display: 'inline-flex', gap: 8, alignItems: 'center' }}>
                                     <span className="kbd">{c}</span>
-                                    <button
-                                      className="btn secondary"
-                                      style={{ padding: '6px 10px' }}
-                                      onClick={() => returnOneBookToStorage(c, r.student_id, r.title_id)}
-                                      disabled={returnBusyCode === c}
-                                    >
+                                    <button className="btn secondary" style={{ padding: '6px 10px' }} onClick={() => returnOneBookToStorage(c, r.student_id, r.title_id)} disabled={returnBusyCode === c}>
                                       {returnBusyCode === c ? '…' : '→ Lager'}
                                     </button>
                                   </span>
