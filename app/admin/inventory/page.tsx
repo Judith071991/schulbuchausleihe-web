@@ -440,6 +440,85 @@ export default function AdminInventoryPage() {
   }
   // ===== /Soll–Ist pro Schüler =====
 
+  // ===== NEU: Buchcodes pro Schüler+Titel + Rückgabe pro Buch =====
+  const [openCodesKey, setOpenCodesKey] = useState<string>('');
+  const [codeRows, setCodeRows] = useState<Record<string, string[]>>({});
+  const [codeLoadingKey, setCodeLoadingKey] = useState<string>('');
+  const [codeErrKey, setCodeErrKey] = useState<Record<string, string>>({});
+  const [returnBusyCode, setReturnBusyCode] = useState<string>('');
+
+  async function toggleLoadStudentBookCodes(student_id: string, title_id: string) {
+    const key = `${student_id}__${title_id}`;
+
+    if (openCodesKey === key) {
+      setOpenCodesKey('');
+      return;
+    }
+    setOpenCodesKey(key);
+
+    // Cache?
+    if (codeRows[key]) return;
+
+    setCodeLoadingKey(key);
+    setCodeErrKey((p) => ({ ...p, [key]: '' }));
+
+    try {
+      const { data, error } = await supabase
+        .from('sb_books')
+        .select('book_code')
+        .eq('holder_type', 'student')
+        .eq('holder_id', student_id)
+        .eq('title_id', title_id)
+        .order('book_code', { ascending: true })
+        .limit(5000);
+
+      if (error) throw error;
+
+      const codes = (data ?? []).map((x: any) => String(x.book_code)).filter(Boolean);
+      setCodeRows((p) => ({ ...p, [key]: codes }));
+    } catch (e: any) {
+      setCodeErrKey((p) => ({ ...p, [key]: e?.message ?? 'Fehler beim Laden der Buchcodes.' }));
+      setCodeRows((p) => ({ ...p, [key]: [] }));
+    } finally {
+      setCodeLoadingKey('');
+    }
+  }
+
+  async function returnOneBookToStorage(book_code: string, student_id: string, title_id: string) {
+    setMsg(null);
+    setOk(null);
+
+    try {
+      const code = (book_code || '').trim();
+      if (!code) throw new Error('Buchcode fehlt.');
+
+      setReturnBusyCode(code);
+
+      const { error } = await supabase.rpc('sb_admin_return_book_to_storage', {
+        p_book_code: code,
+      });
+      if (error) throw error;
+
+      setOk(`Buch ${code} → Lager.`);
+
+      // Cache für diese Zeile invalidieren
+      const key = `${student_id}__${title_id}`;
+      setCodeRows((p) => {
+        const next = { ...p };
+        delete next[key];
+        return next;
+      });
+
+      await loadStudentCheck();
+      await loadSummary();
+    } catch (e: any) {
+      setMsg(e?.message ?? 'Fehler bei der Rückgabe.');
+    } finally {
+      setReturnBusyCode('');
+    }
+  }
+  // ===== /NEU =====
+
   // ===== „Wer fehlt?“ =====
   const [missingOpen, setMissingOpen] = useState(false);
   const [missingTitle, setMissingTitle] = useState<{ title_id: string; title_name?: string | null; subject?: string | null } | null>(null);
@@ -502,13 +581,11 @@ export default function AdminInventoryPage() {
       if (!cid) throw new Error('Klasse fehlt.');
       if (!r?.title_id) throw new Error('Titel fehlt.');
 
-      // Diese View liefert genau „dürfte nicht haben“ + „doppelt“ + cnt_extra
       const { data, error } = await supabase
         .from('sb_book_problem_students')
         .select('class_id,title_id,student_id,cnt_is,cnt_should,cnt_extra,cnt_duplicate,forbidden_hold')
         .ilike('class_id', cid)
         .eq('title_id', r.title_id)
-        // nur echte Probleme anzeigen
         .or('forbidden_hold.is.true,cnt_duplicate.gt.0,cnt_extra.gt.0')
         .order('student_id', { ascending: true });
 
@@ -528,7 +605,7 @@ export default function AdminInventoryPage() {
     setProblemTitle(null);
     setProblemRows([]);
     setProblemErr(null);
-     }
+  }
   // ===== /Probleme =====
 
   useEffect(() => {
@@ -1266,6 +1343,7 @@ export default function AdminInventoryPage() {
                   <th style={{ textAlign: 'right', padding: 8 }}>Ist</th>
                   <th style={{ textAlign: 'right', padding: 8 }}>Fehlt</th>
                   <th style={{ textAlign: 'right', padding: 8 }}>Zu viel</th>
+                  <th style={{ textAlign: 'left', padding: 8 }}>Buchcodes</th>
                   <th style={{ textAlign: 'left', padding: 8 }}>Aktion</th>
                 </tr>
               </thead>
@@ -1274,38 +1352,94 @@ export default function AdminInventoryPage() {
                   const missing = Number(r.cnt_missing ?? 0);
                   const extra = Number(r.cnt_extra ?? 0);
                   const okRow = missing === 0 && extra === 0;
+                  const key = `${r.student_id}__${r.title_id}`;
 
                   return (
-                    <tr key={`${r.student_id}_${r.title_id}_${idx}`} style={{ borderTop: '1px solid rgba(255,255,255,0.10)' }}>
-                      <td style={{ padding: 8, opacity: 0.9 }}>{r.subject ?? '-'}</td>
-                      <td style={{ padding: 8 }}>
-                        <div style={{ fontWeight: 800 }}>{r.title_name ?? r.title_id}</div>
-                        <div className="small" style={{ opacity: 0.75 }}>
-                          {r.title_id}
-                        </div>
-                      </td>
-                      <td style={{ padding: 8, opacity: 0.9 }}>{r.isbn ?? '-'}</td>
-                      <td style={{ padding: 8, opacity: 0.9 }}>{euro(r.price_eur)}</td>
-                      <td style={{ padding: 8, textAlign: 'right' }}>{Number(r.cnt_should ?? 0)}</td>
-                      <td style={{ padding: 8, textAlign: 'right' }}>{Number(r.cnt_is ?? 0)}</td>
-                      <td style={{ padding: 8, textAlign: 'right', fontWeight: 800, color: missing > 0 ? 'rgba(255,93,108,.95)' : 'rgba(255,255,255,0.85)' }}>
-                        {missing}
-                      </td>
-                      <td style={{ padding: 8, textAlign: 'right', fontWeight: 800, color: extra > 0 ? 'rgba(255,188,66,.95)' : 'rgba(255,255,255,0.85)' }}>
-                        {extra}
-                      </td>
-                      <td style={{ padding: 8 }}>
-                        {okRow ? (
-                          <span className="badge">OK</span>
-                        ) : missing > 0 ? (
-                          <button className="btn ok" style={{ padding: '6px 10px' }} onClick={() => openAssignForStudent(r)}>
-                            Jetzt zuweisen
+                    <>
+                      <tr key={`${r.student_id}_${r.title_id}_${idx}`} style={{ borderTop: '1px solid rgba(255,255,255,0.10)' }}>
+                        <td style={{ padding: 8, opacity: 0.9 }}>{r.subject ?? '-'}</td>
+                        <td style={{ padding: 8 }}>
+                          <div style={{ fontWeight: 800 }}>{r.title_name ?? r.title_id}</div>
+                          <div className="small" style={{ opacity: 0.75 }}>
+                            {r.title_id}
+                          </div>
+                        </td>
+                        <td style={{ padding: 8, opacity: 0.9 }}>{r.isbn ?? '-'}</td>
+                        <td style={{ padding: 8, opacity: 0.9 }}>{euro(r.price_eur)}</td>
+                        <td style={{ padding: 8, textAlign: 'right' }}>{Number(r.cnt_should ?? 0)}</td>
+                        <td style={{ padding: 8, textAlign: 'right' }}>{Number(r.cnt_is ?? 0)}</td>
+                        <td
+                          style={{
+                            padding: 8,
+                            textAlign: 'right',
+                            fontWeight: 800,
+                            color: missing > 0 ? 'rgba(255,93,108,.95)' : 'rgba(255,255,255,0.85)',
+                          }}
+                        >
+                          {missing}
+                        </td>
+                        <td
+                          style={{
+                            padding: 8,
+                            textAlign: 'right',
+                            fontWeight: 800,
+                            color: extra > 0 ? 'rgba(255,188,66,.95)' : 'rgba(255,255,255,0.85)',
+                          }}
+                        >
+                          {extra}
+                        </td>
+
+                        <td style={{ padding: 8 }}>
+                          <button className="btn secondary" style={{ padding: '6px 10px' }} onClick={() => toggleLoadStudentBookCodes(r.student_id, r.title_id)}>
+                            {openCodesKey === key ? 'Schließen' : 'anzeigen'}
                           </button>
-                        ) : (
-                          <span className="badge">Prüfen</span>
-                        )}
-                      </td>
-                    </tr>
+                        </td>
+
+                        <td style={{ padding: 8 }}>
+                          {okRow ? (
+                            <span className="badge">OK</span>
+                          ) : missing > 0 ? (
+                            <button className="btn ok" style={{ padding: '6px 10px' }} onClick={() => openAssignForStudent(r)}>
+                              Jetzt zuweisen
+                            </button>
+                          ) : (
+                            <span className="badge">Prüfen</span>
+                          )}
+                        </td>
+                      </tr>
+
+                      {openCodesKey === key ? (
+                        <tr key={`${key}__codes`}>
+                          <td colSpan={10} style={{ padding: 10, borderTop: '1px solid rgba(255,255,255,0.08)' }}>
+                            {codeLoadingKey === key ? (
+                              <div className="small">Lade Buchcodes…</div>
+                            ) : codeErrKey[key] ? (
+                              <div className="small" style={{ color: 'rgba(255,93,108,.95)', whiteSpace: 'pre-wrap' }}>
+                                {codeErrKey[key]}
+                              </div>
+                            ) : (codeRows[key] ?? []).length === 0 ? (
+                              <div className="small" style={{ opacity: 0.85 }}>Keine Buchcodes gefunden.</div>
+                            ) : (
+                              <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap', alignItems: 'center' }}>
+                                {(codeRows[key] ?? []).map((c) => (
+                                  <span key={c} className="badge" style={{ display: 'inline-flex', gap: 8, alignItems: 'center' }}>
+                                    <span className="kbd">{c}</span>
+                                    <button
+                                      className="btn secondary"
+                                      style={{ padding: '6px 10px' }}
+                                      onClick={() => returnOneBookToStorage(c, r.student_id, r.title_id)}
+                                      disabled={returnBusyCode === c}
+                                    >
+                                      {returnBusyCode === c ? '…' : '→ Lager'}
+                                    </button>
+                                  </span>
+                                ))}
+                              </div>
+                            )}
+                          </td>
+                        </tr>
+                      ) : null}
+                    </>
                   );
                 })}
               </tbody>
@@ -1315,7 +1449,7 @@ export default function AdminInventoryPage() {
 
         <div style={{ height: 6 }} />
         <div className="small" style={{ opacity: 0.75 }}>
-          Quelle: View <b>sb_student_required_check</b>
+          Quelle: View <b>sb_student_required_check</b> + Tabelle <b>sb_books</b> (Einzelexemplare) + RPC <b>sb_admin_return_book_to_storage</b>
         </div>
       </div>
     </div>
